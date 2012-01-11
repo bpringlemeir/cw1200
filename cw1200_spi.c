@@ -429,12 +429,10 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 	self->pdata = plat_data;
 	self->func = func;
 
-	printk(KERN_ERR "CW1200 probe3.\n");
 	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
 			      self, &func->dev, &self->core, 
 			      self->pdata->pll_init_val);
 
-	printk(KERN_ERR "CW1200 probe4.\n");
 	return status;
 }
 
