@@ -1,3 +1,4 @@
+
 /*
  * Mac80211 SDIO driver for ST-Ericsson CW1200 device
  *
@@ -98,8 +99,17 @@ struct sbus_priv {
 	void			*irq_priv;
 };
 
+#ifndef SDIO_VENDOR_ID_STE
+#define SDIO_VENDOR_ID_STE		0x0020
+#endif
+
+#ifndef SDIO_DEVICE_ID_STE_CW1200
+#define SDIO_DEVICE_ID_STE_CW1200	0x2280
+#endif
+
 static const struct sdio_device_id cw1200_sdio_ids[] = {
-	{ SDIO_DEVICE(SDIO_ANY_ID, SDIO_ANY_ID) },
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_STE, SDIO_DEVICE_ID_STE_CW1200) },
+//	{ SDIO_DEVICE(SDIO_ANY_ID, SDIO_ANY_ID) },
 	{ /* end: all zeroes */			},
 };
 
@@ -197,8 +207,11 @@ exit:
 
 static void cw1200_sdio_irq_enable(struct sbus_priv *self, int enable)
 {
+#ifndef CONFIG_CW1200_USE_GPIO_IRQ
 	if (self->pdata->disable_irq) 
 		self->func->card->host->ops->enable_sdio_irq(self->func->card->host, enable);
+#endif
+	return;
 }
 
 static int cw1200_sdio_irq_subscribe(struct sbus_priv *self,
@@ -317,11 +330,11 @@ static int cw1200_sdio_on(const struct cw1200_platform_data *pdata)
 	/* It is not stated in the datasheet, but at least some of devices
 	 * have problems with reset if this stage is omited. */
 	msleep(50);
-	gpio_direction_output(reset->start, 0);
+	gpio_set_value(reset->start, 0);
 	/* A valid reset shall be obtained by maintaining WRESETN
 	 * active (low) for at least two cycles of LP_CLK after VDDIO
 	 * is stable within it operating range. */
-	msleep(1);
+	msleep(50); // XXX was 1
 	gpio_set_value(reset->start, 1);
 	/* The host should wait 32 ms after the WRESETN release
 	 * for the on-chip LDO to stabilize */

@@ -525,7 +525,7 @@ cw1200_tx_h_crypt(struct cw1200_common *priv,
 	memmove(newhdr, newhdr + iv_len, t->hdrlen);
 	t->hdr = (struct ieee80211_hdr *) newhdr;
 #else
-	memset(t->hdr+t->hdrlen, 0, iv_len); /* Hardware sets this up anyway */
+	memset(((u8*)t->hdr)+t->hdrlen, 0, iv_len); /* Hardware sets this up anyway */
 #endif
 
 	t->hdrlen += iv_len;

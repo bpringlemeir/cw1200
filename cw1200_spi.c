@@ -351,7 +351,7 @@ static int cw1200_spi_on(const struct cw1200_platform_data *pdata)
 	/* A valid reset shall be obtained by maintaining WRESETN
 	 * active (low) for at least two cycles of LP_CLK after VDDIO
 	 * is stable within it operating range. */
-	msleep(1);
+	msleep(50);
 	gpio_set_value(reset->start, 1);
 	/* The host should wait 30 ms after the WRESETN release
 	 * for the on-chip LDO to stabilize */
@@ -521,7 +521,3 @@ static void __exit cw1200_spi_exit(void)
 
 module_init(cw1200_spi_init);
 module_exit(cw1200_spi_exit);
-
-MODULE_AUTHOR("Sagrad");
-MODULE_DESCRIPTION("CW1200 wifi driver");
-MODULE_LICENSE("GPL");
