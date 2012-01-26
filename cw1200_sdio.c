@@ -437,8 +437,9 @@ static int __devinit cw1200_sdio_probe(struct sdio_func *func,
 	sdio_release_host(func);
 
 	status = cw1200_core_probe(&cw1200_sdio_sbus_ops,
-			      self, &func->dev, &self->core, 
-			      self->pdata->pll_init_val);
+				   self, &func->dev, &self->core, 
+				   self->pdata->pll_init_val, 
+				   self->pdata->macaddr);
 	if (status) {
 		sdio_claim_host(func);
 		sdio_disable_func(func);

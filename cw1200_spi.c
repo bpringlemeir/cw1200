@@ -430,8 +430,9 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 	self->func = func;
 
 	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
-			      self, &func->dev, &self->core, 
-			      self->pdata->pll_init_val);
+				   self, &func->dev, &self->core, 
+				   self->pdata->pll_init_val,
+				   self->pdata->macaddr);
 
 	return status;
 }

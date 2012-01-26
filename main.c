@@ -241,7 +241,7 @@ static const struct ieee80211_ops cw1200_ops = {
 	/*.cancel_remain_on_channel = cw1200_cancel_remain_on_channel,	*/
 };
 
-struct ieee80211_hw *cw1200_init_common(size_t priv_data_len)
+struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 {
 	int i;
 	struct ieee80211_hw *hw;
@@ -318,14 +318,17 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len)
 	hw->wiphy->max_scan_ssids = 2;
 	hw->wiphy->max_scan_ie_len = IEEE80211_MAX_DATA_LEN;
 
+	if (macaddr)
+	  SET_IEEE80211_PERM_ADDR(hw, macaddr);
+	else
+	  SET_IEEE80211_PERM_ADDR(hw, cw1200_mac_template);
+
 	/* Fix up mac address if necessary */
 	if (hw->wiphy->perm_addr[3] == 0 &&
 	    hw->wiphy->perm_addr[4] == 0 &&
 	    hw->wiphy->perm_addr[5] == 0) {
 		get_random_bytes(&hw->wiphy->perm_addr[3], 3);
 	}
-
-	SET_IEEE80211_PERM_ADDR(hw, cw1200_mac_template);
 
 	mutex_init(&priv->wsm_cmd_mux);
 	mutex_init(&priv->conf_mutex);
@@ -479,13 +482,13 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 		      struct sbus_priv *sbus,
 		      struct device *pdev,
 		      struct cw1200_common **pself,
-		      int init_pll_val)
+		      int init_pll_val, u8 *macaddr)
 {
 	int err = -ENOMEM;
 	struct ieee80211_hw *dev;
 	struct cw1200_common *priv;
 
-	dev = cw1200_init_common(sizeof(struct cw1200_common));
+	dev = cw1200_init_common(sizeof(struct cw1200_common), macaddr);
 	if (!dev)
 		goto err;
 

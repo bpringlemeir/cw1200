@@ -11,16 +11,17 @@
 #include <linux/ioport.h>
 
 struct cw1200_platform_data {
-	const char *mmc_id;             // REQUIRED for SDIO
-	int spi_bits_per_word;          // OPTIONAL only for SPI
+	const char *mmc_id;             // REQUIRED, SDIO-only
+	int spi_bits_per_word;          // REQUIRED, SPI-only
 	unsigned int pll_init_val;      // REQUIRED
-	int disable_irq;                // set to 1 as needed.
-	const struct resource *irq;     // REQUIRED when GPIO_IRQ is in use
-	const struct resource *reset;   // Can be NULL w/ HW circuit
+	int disable_irq;                // set to 1 as needed
+	const struct resource *irq;     // REQUIRED for SPI or SDIO w/GPIO_IRQ
+	const struct resource *reset;   // Can be NULL w/ HW reset circuit
 	int (*power_ctrl)(const struct cw1200_platform_data *pdata,
-			  bool enable); // Can be NULL w/ H/W reset circuit
+			  bool enable); // Can be NULL w/ H/W power circuit
 	int (*clk_ctrl)(const struct cw1200_platform_data *pdata,
 			bool enable); // Can be NULL
+	const u8 *macaddr;  // if NULL, use cw1200_mac_template module parameter 
 };
 
 /* Declaration only. Should be implemented in arch/xxx/mach-yyy */
