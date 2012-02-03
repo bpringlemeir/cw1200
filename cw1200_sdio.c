@@ -353,14 +353,8 @@ static int cw1200_sdio_reset(struct sbus_priv *self)
 
 static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 {
-#ifdef CONFIG_CW1200_SDIO_CMD53_WORKAROUND
-	if (size == SDIO_BLOCK_SIZE)
-		size += 2;  /* HW bug; force use of block mode */
-#endif
-
 #if defined(CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES)
 	size = sdio_align_size(self->func, size);
-
 #if 0
 	/* HACK!!! Problems with DMA size on u8500 platform  */
 	if ((size & 0x1F) && (size & ~0x1F)) {
@@ -368,12 +362,18 @@ static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 		size += 0x20;
 	}
 #endif
-#else
+#else /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
 	if (size & (SDIO_BLOCK_SIZE - 1)) {
 		size &= ~(SDIO_BLOCK_SIZE - 1);
 		size += SDIO_BLOCK_SIZE;
 	}
+#endif /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
+
+#ifdef CONFIG_CW1200_SDIO_CMD53_WORKAROUND
+	if (size == SDIO_BLOCK_SIZE)
+		size += SDIO_BLOCK_SIZE;  /* HW bug; force use of block mode */
 #endif
+
 	return size;
 }
 

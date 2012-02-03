@@ -35,6 +35,7 @@ config CW1200_SDIO_CMD53_WORKAROUND
 	help
 	  Say Y here if you are using a kernel older than 3.2-rc2 or
 	  did not apply 300-cw1200_sdio_quirk.diff to the kernel tree.
+	  If unsure, say Y.
 
 config CW1200_USE_GPIO_IRQ
       bool "Use GPIO interrupt"
@@ -59,8 +60,8 @@ config CW1200_WAPI_SUPPORT
         If unsure, say N.
 
 config CW1200_PM
-      bool "Enable advanced Power management"
-      depends on PM
+      bool "Enable CW1200 advanced Power management"
+      depends on CW1200 && PM
 
 menu "Driver debug features"
       depends on CW1200
@@ -85,6 +86,9 @@ config CW1200_TX_POLICY_DEBUG
 
 config CW1200_STA_DEBUG
       bool "Enable STA/AP debug (DEVELOPMENT)"
+
+config CW1200_ETF
+       bool "Enable CW1200 Engineering Test Framework hooks"
 
 endmenu
 

@@ -279,7 +279,7 @@ static int cw1200_bh(void *arg)
 	int rx, tx, term, suspend;
 	struct wsm_hdr *wsm;
 	size_t wsm_len;
-	int wsm_id;
+	u16 wsm_id;
 	u8 wsm_seq;
 	int rx_resync = 1;
 	u16 ctrl_reg = 0;
@@ -396,7 +396,7 @@ rx:
 				((__le16 *)data)[alloc_len / 2 - 1]);
 
 			wsm = (struct wsm_hdr *)data;
-			wsm_len = __le32_to_cpu(wsm->len);
+			wsm_len = __le16_to_cpu(wsm->len);
 			if (WARN_ON(wsm_len > read_len))
 				break;
 
@@ -405,8 +405,8 @@ rx:
 				data, wsm_len);
 #endif /* CONFIG_CW1200_WSM_DUMPS */
 
-			wsm_id  = __le32_to_cpu(wsm->id) & 0xFFF;
-			wsm_seq = (__le32_to_cpu(wsm->id) >> 13) & 7;
+			wsm_id  = __le16_to_cpu(wsm->id) & 0xFFF;
+			wsm_seq = (__le16_to_cpu(wsm->id) >> 13) & 7;
 
 			skb_trim(skb_rx, wsm_len);
 
@@ -476,7 +476,7 @@ tx:
 			} else {
 				wsm = (struct wsm_hdr *)data;
 				BUG_ON(tx_len < sizeof(*wsm));
-				BUG_ON(__le32_to_cpu(wsm->len) != tx_len);
+				BUG_ON(__le16_to_cpu(wsm->len) != tx_len);
 
 #if 0 /* count is not implemented */
 				if (ret > 1)
@@ -488,9 +488,9 @@ tx:
 				tx_len = priv->sbus_ops->align_size(
 						priv->sbus_priv, tx_len);
 
-				wsm->id &= __cpu_to_le32(
+				wsm->id &= __cpu_to_le16(
 						~WSM_TX_SEQ(WSM_TX_SEQ_MAX));
-				wsm->id |= cpu_to_le32(
+				wsm->id |= __cpu_to_le16(
 						WSM_TX_SEQ(priv->wsm_tx_seq));
 
 				if (WARN_ON(cw1200_data_write(priv,
@@ -503,7 +503,7 @@ tx:
 
 #if defined(CONFIG_CW1200_WSM_DUMPS)
 				print_hex_dump_bytes("--> ", DUMP_PREFIX_NONE,
-					data, __le32_to_cpu(wsm->len));
+					data, __le16_to_cpu(wsm->len));
 #endif /* CONFIG_CW1200_WSM_DUMPS */
 
 				wsm_txed(priv, data);

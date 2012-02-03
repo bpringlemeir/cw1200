@@ -155,12 +155,17 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	val32 &= ~ST90TDS_CONFIG_CPU_CLK_DIS_BIT;
 	REG_WRITE(ST90TDS_CONFIG_REG_ID, val32);
 
+#ifdef CONFIG_CW1200_ETF
+	if (etf_mode)
+		fw_path = etf_firmware;
+#endif
+
 	/* Load a firmware file */
 	ret = request_firmware(&firmware, fw_path, priv->pdev);
 	if (ret) {
 		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't load firmware file %s.\n",
-			__func__, fw_path);
+			   "%s: can't load firmware file %s.\n",
+			   __func__, fw_path);
 		goto error;
 	}
 	BUG_ON(!firmware->data);

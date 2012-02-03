@@ -421,6 +421,138 @@ static const struct file_operations fops_11n = {
 	.llseek = default_llseek,
 };
 
+#ifdef CONFIG_CW1200_ETF
+static int cw1200_etf_out_show(struct seq_file *seq, void *v)
+{
+	struct cw1200_common *priv = seq->private;
+	struct sk_buff *skb;
+	u32 len = 0;
+
+	skb = skb_dequeue(&priv->etf_q);
+
+#ifdef ETF_DEBUG
+	printk(KERN_INFO "ETF_OUT (skb %p len %d)\n", skb, skb? skb->len : 0);
+#endif
+
+	if (skb) len = skb->len;
+
+	seq_write(seq, &len, sizeof(len));
+
+	if (skb) {
+		seq_write(seq, skb->data, len);
+		kfree_skb(skb);
+	}
+
+	return 0;
+}
+
+static int cw1200_etf_out_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, &cw1200_etf_out_show,
+			   inode->i_private);
+}
+
+static const struct file_operations fops_etf_out = {
+	.open = cw1200_etf_out_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+	.owner = THIS_MODULE,
+};
+
+struct etf_req_msg;
+int ETF_Request(struct cw1200_common *priv, struct etf_req_msg *msg, u32 len);
+
+#define MAX_RX_SZE 2600
+
+struct etf_in_state {
+	struct cw1200_common *priv;
+	u32 total_len;
+	u8 buf[MAX_RX_SZE];
+	u32 written;
+};
+
+static int cw1200_etf_in_open(struct inode *inode, struct file *file)
+{
+	struct etf_in_state *etf = kmalloc(sizeof(struct etf_in_state), GFP_KERNEL);
+
+	if (!etf)
+		return -ENOMEM;
+
+	etf->written = 0;
+	etf->total_len = 0;
+	etf->priv = inode->i_private;
+
+	file->private_data = etf;
+
+	return 0;
+}
+
+static int cw1200_etf_in_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
+static ssize_t cw1200_etf_in_write(struct file *file,
+	const char __user *user_buf, size_t count, loff_t *ppos)
+{
+	struct etf_in_state *etf = file->private_data;
+
+	ssize_t written = 0;
+
+#ifdef ETF_DEBUG
+	printk(KERN_INFO "ETF_IN_W (%d/%d) @%llu (count %d)\n", 
+	       etf->written, etf->total_len,
+	       *ppos, count);
+#endif
+
+	if (!etf->total_len) {
+		if (count < sizeof(etf->total_len)) {
+			printk(KERN_ERR "count < sizeof(total_len)\n");
+			return -EINVAL;
+		}
+
+		if (copy_from_user(&etf->total_len, user_buf, sizeof(etf->total_len))) {
+			printk(KERN_ERR "copy_from_user (len) failed\n");
+			return -EFAULT;
+		}
+
+		written += sizeof(etf->total_len);
+		count -= sizeof(etf->total_len);
+	}
+
+	if (!count)
+		goto done;
+
+	if (copy_from_user(etf->buf + etf->written, user_buf + written, count)) {
+		printk(KERN_ERR "copy_from_user (payload %d) failed\n", count);
+		return -EFAULT;
+	}
+
+	written += count;
+	etf->written += count;
+
+	if (etf->written >= etf->total_len) {
+		if (ETF_Request(etf->priv, (struct etf_req_msg *)etf->buf, etf->total_len)) {
+			printk(KERN_ERR "ETF_Request failed\n");
+			return -EIO;
+		}
+	}
+
+done:
+	return written;
+}
+
+static const struct file_operations fops_etf_in = {
+	.open = cw1200_etf_in_open,
+	.release = cw1200_etf_in_release,
+	.write = cw1200_etf_in_write,
+	.llseek = default_llseek,
+	.owner = THIS_MODULE,
+};
+#endif /* CONFIG_CW1200_ETF */
+
 int cw1200_debug_init(struct cw1200_common *priv)
 {
 	struct cw1200_debug_priv *d = kzalloc(sizeof(struct cw1200_debug_priv),
@@ -446,6 +578,19 @@ int cw1200_debug_init(struct cw1200_common *priv)
 			d->debugfs_phy, priv, &fops_11n))
 		goto err;
 
+#ifdef CONFIG_CW1200_ETF
+	if (etf_mode) {
+		skb_queue_head_init(&priv->etf_q);
+
+		if (!debugfs_create_file("etf_out", S_IRUSR, d->debugfs_phy,
+					 priv, &fops_etf_out))
+			goto err;
+		if (!debugfs_create_file("etf_in", S_IWUSR, d->debugfs_phy,
+					 priv, &fops_etf_in))
+			goto err;
+	}
+#endif /* CONFIG_CW1200_ETF */
+
 	return 0;
 
 err:
@@ -465,3 +610,130 @@ void cw1200_debug_release(struct cw1200_common *priv)
 		kfree(d);
 	}
 }
+
+#ifdef CONFIG_CW1200_ETF
+struct cw1200_sdd {
+	u8 id;
+	u8 len;
+	u8 data[];
+};
+#define SDD_REFERENCE_FREQUENCY_ELT_ID 0xc5
+
+struct etf_req_msg {
+	u32 id;
+	u32 len;
+	u8 data[];
+};
+
+int Parse_SDD_File(struct cw1200_common *priv, u8 *data, u32 length)
+{
+	struct cw1200_sdd *ie;
+
+	while (length > 0) {
+		ie = (struct cw1200_sdd *) data;
+		if (ie->id == SDD_REFERENCE_FREQUENCY_ELT_ID) {
+			u16 clk = cpu_to_le16(*((u16*)ie->data));
+			switch (clk) {
+			case 0x32C8:
+				priv->init_pll_val = 0x1D89D241;
+				break;
+			case 0x3E80:
+				priv->init_pll_val = 0x1E1;
+				break;
+			case 0x41A0:
+				priv->init_pll_val = 0x124931C1;
+				break;
+			case 0x4B00:
+				priv->init_pll_val = 0x191;
+				break;
+			case 0x5DC0:
+				priv->init_pll_val = 0x141;
+				break;
+			case 0x6590:
+				priv->init_pll_val = 0x0EC4F121;
+				break;
+			case 0x8340:
+				priv->init_pll_val = 0x92490E1;
+				break;
+			case 0x9600:
+				priv->init_pll_val = 0x100010C1;
+				break;
+			case 0x9C40:
+				priv->init_pll_val = 0xC1;
+				break;
+			case 0xBB80:
+				priv->init_pll_val = 0xA1;
+				break;
+			case 0xCB20:
+				priv->init_pll_val = 0x7627091;
+				break;
+			default:
+				printk(KERN_ERR "Unknown Reference clock frequency found (0x%04x), using default\n", clk);
+				break;
+			}
+			printk(KERN_INFO "Using Reference clock frequency %d KHz (pll 0x%08x)\n", clk, 
+			       priv->init_pll_val);
+			break;
+		}
+
+		length -= ie->len + sizeof(*ie);
+		data += ie->len + sizeof(*ie);
+	}
+	return 0;
+}
+
+char *etf_firmware = NULL;
+
+#define ST90TDS_START_ADAPTER           0x09    /*  Loads Firmware and start the adapter */
+#define ST90TDS_STOP_ADAPTER            0x0A    /*  Stops the adapter */
+#define ST90TDS_CONFIG_ADAPTER          0x0E    /*  send adapter configuration params */
+#define ST90TDS_SBUS_READ               0x13
+#define ST90TDS_SBUS_WRITE              0x14
+#define ST90TDS_GET_DEVICE_OPTION       0x19
+#define ST90TDS_SET_DEVICE_OPTION       0x1A
+#define ST90TDS_SEND_SDD                0x1D    // SDD File for DPLL
+
+#include "fwio.h"
+
+int ETF_Request(struct cw1200_common *priv, struct etf_req_msg *msg, u32 len)
+{
+	int rval = -1;
+	switch (msg->id) {
+	case ST90TDS_START_ADAPTER:
+		etf_firmware = "cw1200_etf.bin";
+		printk(KERN_INFO "ETF_START (len %d, '%s')\n", len, etf_firmware);
+		rval = cw1200_load_firmware(priv);
+		break;
+	case ST90TDS_STOP_ADAPTER:
+		printk(KERN_INFO "ETF_STOP (unhandled)\n");
+		// XXX handle this somehow?
+		break;
+	case ST90TDS_SEND_SDD:
+		printk(KERN_INFO "ETF_SDD\n");
+		rval = Parse_SDD_File(priv, msg->data, msg->len);
+		break;
+	case ST90TDS_CONFIG_ADAPTER:
+		printk(KERN_INFO "ETF_CONFIG_ADAP (unhandled)\n");
+		// XXX unhandled in ST-E code.
+		break;
+	case ST90TDS_SBUS_READ:
+		printk(KERN_INFO "ETF_SBUS_READ (unhandled)\n");
+		// XXX read 32-bit value?  Not used.
+		break;
+	case ST90TDS_SBUS_WRITE:
+		printk(KERN_INFO "ETF_SBUS_WRITE (unhandled)\n");
+		// XXX write 32-bit value? Not used.
+		break;
+	case ST90TDS_SET_DEVICE_OPTION:
+		printk(KERN_INFO "ETF_SET_DEV_OPT (unhandled)\n");
+		// XXX not handled..
+		break;
+	default:
+		printk(KERN_INFO "ETF_PASSTHRU (0x%08x)\n", msg->id);
+		rval = wsm_raw_cmd(priv, (u8*) msg, len);
+		break;
+	}
+
+	return rval;
+}
+#endif /* CONFIG_CW1200_ETF */

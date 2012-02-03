@@ -1014,8 +1014,10 @@ int wsm_cmd_send(struct cw1200_common *priv,
 	// Due to buggy SPI on CW1200, we need to
 	// pad the message by a few bytes to ensure
 	// that it's completely received.
-	
-	buf_len += 4;
+#ifdef CONFIG_CW1200_ETF
+	if (!etf_mode)
+#endif	
+		buf_len += 4;
 #endif
 
 	/* Fill HI message header */
@@ -1083,6 +1085,37 @@ int wsm_cmd_send(struct cw1200_common *priv,
 	wsm_buf_reset(buf);
 	return ret;
 }
+
+#ifdef CONFIG_CW1200_ETF
+int wsm_raw_cmd(struct cw1200_common *priv, u8 *data, size_t len)
+{
+	struct wsm_buf *buf = &priv->wsm_cmd_buf;
+	int ret;
+
+	u16 *cmd = (u16*)(data + 2);
+
+#ifdef ETF_DEBUG
+	printk(KERN_INFO "RAW WSM: 0x%04x (len %d)\n",
+	       *cmd, len);
+
+	print_hex_dump_bytes("WSM_TX: ", DUMP_PREFIX_NONE,
+		data, len);
+#endif
+
+	wsm_cmd_lock(priv);
+
+	WSM_PUT(buf, data + 4, len - 4);  /* Skip over header (u16+u16) */
+
+	ret = wsm_cmd_send(priv, buf, NULL, __le16_to_cpu(*cmd), WSM_CMD_TIMEOUT);
+
+	wsm_cmd_unlock(priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(priv);
+	return -ENOMEM;
+}
+#endif /* CONFIG_CW1200_ETF */
 
 /* ******************************************************************** */
 /* WSM TX port control							*/
@@ -1183,7 +1216,7 @@ underflow:
 	return -EINVAL;
 }
 
-int wsm_handle_rx(struct cw1200_common *priv, int id,
+int wsm_handle_rx(struct cw1200_common *priv, u16 id,
 		  struct wsm_hdr *wsm, struct sk_buff **skb_p)
 {
 	int ret = 0;
@@ -1199,6 +1232,41 @@ int wsm_handle_rx(struct cw1200_common *priv, int id,
 
 	wsm_printk(KERN_DEBUG "[WSM] <<< 0x%.4X (%d)\n", id,
 			wsm_buf.end - wsm_buf.begin);
+
+#ifdef CONFIG_CW1200_ETF
+	if (unlikely(etf_mode)) {
+		struct sk_buff *skb = alloc_skb(wsm_buf.end - wsm_buf.begin, GFP_KERNEL);
+
+#ifdef ETF_DEBUG
+		printk(KERN_INFO "ETF_RX: (0x%04x) %d\n", __le16_to_cpu(wsm->id), wsm_buf.end - wsm_buf.begin);
+		print_hex_dump_bytes("WSM_RX: ", DUMP_PREFIX_NONE,
+				     wsm_buf.begin, wsm_buf.end - wsm_buf.begin);
+#endif
+
+		/* Strip out Sequence num before passing up */
+		wsm->id = __le16_to_cpu(wsm->id);
+		wsm->id &= 0x0FFF;
+		wsm->id = __cpu_to_le16(wsm->id);
+
+		memcpy(skb_put(skb, wsm_buf.end - wsm_buf.begin),
+		       wsm_buf.begin,
+		       wsm_buf.end - wsm_buf.begin);
+		skb_queue_tail(&priv->etf_q, skb);
+
+
+		/* Special case for startup */
+		if (id == 0x0801)
+			wsm_startup_indication(priv, &wsm_buf);
+		if (id & 0x0400) {
+			spin_lock(&priv->wsm_cmd.lock);
+			priv->wsm_cmd.done = 1;
+			spin_unlock(&priv->wsm_cmd.lock);
+			wake_up(&priv->wsm_cmd_wq);
+		}
+
+		goto out;
+	}
+#endif
 
 	if (id == 0x404) {
 		ret = wsm_tx_confirm(priv, &wsm_buf, link_id);

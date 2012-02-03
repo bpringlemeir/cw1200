@@ -54,6 +54,12 @@ static int power_mode = wsm_power_mode_quiescent;
 module_param(power_mode, int, 0644);
 MODULE_PARM_DESC(power_mode, "WSM power mode.  0 == active, 1 == doze, 2 == quiescent (default)");
 
+#ifdef CONFIG_CW1200_ETF
+int etf_mode = 0;
+module_param(etf_mode, int, 0644);
+MODULE_PARM_DESC(etf_mode, "Enable EngineeringTestingFramework operation");
+#endif
+
 /* TODO: use rates and channels from the device */
 #define RATETAB_ENT(_rate, _rateid, _flags)		\
 	{						\
@@ -401,18 +407,25 @@ int cw1200_register_common(struct ieee80211_hw *dev)
 	struct cw1200_common *priv = dev->priv;
 	int err;
 
-	err = ieee80211_register_hw(dev);
-	if (err) {
-		cw1200_dbg(CW1200_DBG_ERROR, "Cannot register device (%d).\n",
-				err);
-		return err;
-	}
+#ifdef CONFIG_CW1200_ETF
+	if (!etf_mode) {
+#endif
+		err = ieee80211_register_hw(dev);
+		if (err) {
+			cw1200_dbg(CW1200_DBG_ERROR, "Cannot register device (%d).\n",
+				   err);
+			return err;
+		}
 
 #ifdef CONFIG_CW1200_LEDS
-	err = cw1200_init_leds(priv);
-	if (err)
-		return err;
+		err = cw1200_init_leds(priv);
+		if (err)
+			return err;
 #endif /* CONFIG_CW1200_LEDS */
+
+#ifdef CONFIG_CW1200_ETF
+	}
+#endif
 
 	cw1200_debug_init(priv);
 
@@ -436,7 +449,13 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 	struct cw1200_common *priv = dev->priv;
 	int i;
 
-	ieee80211_unregister_hw(dev);
+#ifdef CONFIG_CW1200_ETF
+	if (!etf_mode) {
+#endif
+		ieee80211_unregister_hw(dev);
+#ifdef CONFIG_CW1200_ETF
+	}
+#endif
 
 	cw1200_debug_release(priv);
 
@@ -512,6 +531,11 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	if (err)
 		goto err1;
 
+#ifdef CONFIG_CW1200_ETF
+	if (etf_mode)
+		goto skip_fw;
+#endif
+
 	err = cw1200_load_firmware(priv);
 	if (err)
 		goto err2;
@@ -529,6 +553,9 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	/* Enable multi-TX confirmation */
 	WARN_ON(wsm_use_multi_tx_conf(priv, true));
 
+#ifdef CONFIG_CW1200_ETF
+skip_fw:
+#endif
 	err = cw1200_register_common(dev);
 	if (err) {
 		priv->sbus_ops->irq_unsubscribe(priv->sbus_priv);

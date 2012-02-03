@@ -1670,7 +1670,7 @@ void wsm_unlock_tx(struct cw1200_common *priv);
 /* WSM / BH API								*/
 
 int wsm_handle_exception(struct cw1200_common *priv, u8 * data, size_t len);
-int wsm_handle_rx(struct cw1200_common *priv, int id, struct wsm_hdr *wsm,
+int wsm_handle_rx(struct cw1200_common *priv, u16 id, struct wsm_hdr *wsm,
 		  struct sk_buff **skb_p);
 
 /* ******************************************************************** */
@@ -1724,5 +1724,10 @@ static inline u8 wsm_queue_id_to_wsm(u8 queueId)
 	};
 	return queue_mapping[queueId];
 }
+
+
+#ifdef CONFIG_CW1200_ETF
+int wsm_raw_cmd(struct cw1200_common *priv, u8 *data, size_t len);
+#endif
 
 #endif /* CW1200_HWIO_H_INCLUDED */

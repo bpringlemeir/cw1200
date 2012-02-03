@@ -36,6 +36,11 @@
 /* extern */ struct cw1200_debug_priv;
 /* extern */ struct firmware;
 
+#ifdef CONFIG_CW1200_ETF
+extern int etf_mode;
+extern char *etf_firmware;
+#endif
+
 #if defined(CONFIG_CW1200_TXRX_DEBUG)
 #define txrx_printk(...) printk(__VA_ARGS__)
 #else
@@ -239,6 +244,10 @@ struct cw1200_common {
 
 	/* statistics */
 	struct ieee80211_low_level_stats stats;
+
+#ifdef CONFIG_CW1200_ETF
+	struct sk_buff_head etf_q;
+#endif
 };
 
 struct cw1200_sta_priv {
