@@ -561,8 +561,7 @@ int cw1200_debug_init(struct cw1200_common *priv)
 	if (!d)
 		return -ENOMEM;
 
-	d->debugfs_phy = debugfs_create_dir("cw1200",
-			priv->hw->wiphy->debugfsdir);
+	d->debugfs_phy = debugfs_create_dir("cw1200", NULL);
 	if (!d->debugfs_phy)
 		goto err;
 
