@@ -428,6 +428,7 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 	spin_lock_init(&self->lock);
 	self->pdata = plat_data;
 	self->func = func;
+	spi_set_drvdata(func, self);
 
 	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
 				   self, &func->dev, &self->core, 
@@ -452,9 +453,26 @@ static int __devexit cw1200_spi_disconnect(struct spi_device *func)
 	return 0;
 }
 
+static int cw1200_spi_suspend(struct spi_device *spi, pm_message_t mesg)
+{
+	struct sbus_priv *self = spi_get_drvdata(spi);
+	const struct resource *irq = self->pdata ? self->pdata->irq : NULL;
+	if(irq) disable_irq(irq->start);
+	return 0;
+}
+static int cw1200_spi_resume(struct spi_device *spi)
+{
+	struct sbus_priv *self = spi_get_drvdata(spi);
+	const struct resource *irq = self->pdata ? self->pdata->irq : NULL;
+	if(irq) enable_irq(irq->start);
+	return 0;
+}
+
 static struct spi_driver spi_driver = {
 	.probe		= cw1200_spi_probe,
 	.remove		= __devexit_p(cw1200_spi_disconnect),
+	.suspend    = cw1200_spi_suspend,
+	.resume     = cw1200_spi_resume,
 	.driver = {
 		.name		= "cw1200_wlan_spi",
 		.bus            = &spi_bus_type,
