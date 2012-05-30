@@ -66,29 +66,25 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 	if (req->n_ssids > WSM_SCAN_MAX_NUM_OF_SSIDS)
 		return -EINVAL;
 
-	if (req->ie_len != priv->scan.ie_len ||
-	    memcmp(req->ie, priv->scan.ie, req->ie_len)) {
-		frame.skb = ieee80211_probereq_get(hw, priv->vif, NULL, 0,
-			req->ie, req->ie_len);
-		if (!frame.skb)
-			return -ENOMEM;
-		kfree(priv->scan.ie);
-		priv->scan.ie = NULL;
-		priv->scan.ie_len = 0;
-		if (req->ie_len) {
-			priv->scan.ie = kmalloc(req->ie_len, GFP_KERNEL);
-			if (priv->scan.ie) {
-				memcpy(priv->scan.ie, req->ie, req->ie_len);
-				priv->scan.ie_len = req->ie_len;
-			}
-		}
-	}
+	frame.skb = ieee80211_probereq_get(hw, priv->vif, NULL, 0,
+		req->ie, req->ie_len);
+	if (!frame.skb)
+		return -ENOMEM;
 
 	/* will be unlocked in cw1200_scan_work() */
 	down(&priv->scan.lock);
 	mutex_lock(&priv->conf_mutex);
 	if (frame.skb) {
 		int ret = wsm_set_template_frame(priv, &frame);
+		if (0 == ret) {
+			/*
+			* set empty probe response template in order
+			* to receive probe requests from firmware
+			*/
+			frame.frame_type = WSM_FRAME_TYPE_PROBE_RESPONSE;
+			frame.disable = true;
+			ret = wsm_set_template_frame(priv, &frame);
+		}
 		if (ret) {
 			mutex_unlock(&priv->conf_mutex);
 			up(&priv->scan.lock);
@@ -109,15 +105,13 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 	priv->scan.output_power = priv->output_power;
 
 	for (i = 0; i < req->n_ssids; ++i) {
-		if (req->ssids[i].ssid_len) {
-			struct wsm_ssid *dst =
-				&priv->scan.ssids[priv->scan.n_ssids];
-			BUG_ON(req->ssids[i].ssid_len > sizeof(dst->ssid));
-			memcpy(&dst->ssid[0], req->ssids[i].ssid,
-				sizeof(dst->ssid));
-			dst->length = req->ssids[i].ssid_len;
-			++priv->scan.n_ssids;
-		}
+		struct wsm_ssid *dst =
+			&priv->scan.ssids[priv->scan.n_ssids];
+		BUG_ON(req->ssids[i].ssid_len > sizeof(dst->ssid));
+		memcpy(&dst->ssid[0], req->ssids[i].ssid,
+			sizeof(dst->ssid));
+		dst->length = req->ssids[i].ssid_len;
+		++priv->scan.n_ssids;
 	}
 
 	mutex_unlock(&priv->conf_mutex);
@@ -156,7 +150,7 @@ void cw1200_scan_work(struct work_struct *work)
 				!(priv->powersave_mode.pmMode & WSM_PSM_PS)) {
 			struct wsm_set_pm pm = priv->powersave_mode;
 			pm.pmMode = WSM_PSM_PS;
-			wsm_set_pm(priv, &pm);
+			cw1200_set_pm(priv, &pm);
 		} else if (priv->join_status == CW1200_JOIN_STATUS_MONITOR) {
 			/* FW bug: driver has to restart p2p-dev mode
 			 * after scan */
@@ -170,9 +164,13 @@ void cw1200_scan_work(struct work_struct *work)
 						priv->output_power * 10));
 		if (priv->join_status == CW1200_JOIN_STATUS_STA &&
 				!(priv->powersave_mode.pmMode & WSM_PSM_PS))
-			wsm_set_pm(priv, &priv->powersave_mode);
+			cw1200_set_pm(priv, &priv->powersave_mode);
 
-		if (priv->scan.req)
+		if (priv->scan.status < 0)
+			wiphy_dbg(priv->hw->wiphy,
+					"[SCAN] Scan failed (%d).\n",
+					priv->scan.status);
+		else if (priv->scan.req)
 			wiphy_dbg(priv->hw->wiphy,
 					"[SCAN] Scan completed.\n");
 		else
@@ -201,8 +199,11 @@ void cw1200_scan_work(struct work_struct *work)
 				break;
 		}
 		scan.band = first->band;
-		/* TODO: Is it optimal? */
-		scan.maxTransmitRate = WSM_TRANSMIT_RATE_1;
+
+		if (priv->scan.req->no_cck)
+			scan.maxTransmitRate = WSM_TRANSMIT_RATE_6;
+		else
+			scan.maxTransmitRate = WSM_TRANSMIT_RATE_1;
 		/* TODO: Is it optimal? */
 		scan.numOfProbeRequests =
 			(first->flags & IEEE80211_CHAN_PASSIVE_SCAN) ? 0 : 2;
@@ -214,8 +215,10 @@ void cw1200_scan_work(struct work_struct *work)
 		/* It is not stated in WSM specification, however
 		 * FW team says that driver may not use FG scan
 		 * when joined. */
-		if (priv->join_status == CW1200_JOIN_STATUS_STA)
+		if (priv->join_status == CW1200_JOIN_STATUS_STA) {
 			scan.scanType = WSM_SCAN_TYPE_BACKGROUND;
+			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND;
+		}
 		scan.ch = kzalloc(
 			sizeof(struct wsm_scan_ch[it - priv->scan.curr]),
 			GFP_KERNEL);
@@ -236,7 +239,7 @@ void cw1200_scan_work(struct work_struct *work)
 		}
 		priv->scan.status = cw1200_scan_start(priv, &scan);
 		kfree(scan.ch);
-		if (WARN_ON(priv->scan.status))
+		if (priv->scan.status)
 			goto fail;
 		priv->scan.curr = it;
 	}
@@ -264,6 +267,9 @@ static void cw1200_scan_restart_delayed(struct cw1200_common *priv)
 		wiphy_dbg(priv->hw->wiphy,
 				"[CQM] Requeue BSS loss in %d "
 				"beacons.\n", tmo);
+		spin_lock(&priv->bss_loss_lock);
+		priv->bss_loss_status = CW1200_BSS_LOSS_NONE;
+		spin_unlock(&priv->bss_loss_lock);
 		cancel_delayed_work_sync(&priv->bss_loss_work);
 		queue_delayed_work(priv->workqueue,
 				&priv->bss_loss_work,
@@ -322,6 +328,8 @@ void cw1200_scan_timeout(struct work_struct *work)
 				"Timeout waiting for scan "
 				"complete notification.\n");
 			priv->scan.status = -ETIMEDOUT;
+			priv->scan.curr = priv->scan.end;
+			WARN_ON(wsm_stop_scan(priv));
 		}
 		cw1200_scan_complete(priv);
 	}
@@ -374,6 +382,8 @@ void cw1200_probe_work(struct work_struct *work)
 
 	if (cw1200_queue_get_skb(queue,	priv->pending_frame_id,
 			&frame.skb, &txpriv)) {
+		up(&priv->scan.lock);
+		mutex_unlock(&priv->conf_mutex);
 		wsm_unlock_tx(priv);
 		return;
 	}
@@ -381,8 +391,10 @@ void cw1200_probe_work(struct work_struct *work)
 	scan.maxTransmitRate = wsm->maxTxRate;
 	scan.band = (priv->channel->band == IEEE80211_BAND_5GHZ) ?
 		WSM_PHY_BAND_5G : WSM_PHY_BAND_2_4G;
-	if (priv->join_status == CW1200_JOIN_STATUS_STA)
+	if (priv->join_status == CW1200_JOIN_STATUS_STA) {
 		scan.scanType = WSM_SCAN_TYPE_BACKGROUND;
+		scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND;
+	}
 	ch[0].number = priv->channel->hw_value;
 
 	skb_pull(frame.skb, txpriv->offset);

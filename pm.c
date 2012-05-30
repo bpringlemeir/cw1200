@@ -10,11 +10,75 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/if_ether.h>
 #include "cw1200.h"
 #include "pm.h"
 #include "sta.h"
 #include "bh.h"
 #include "sbus.h"
+
+#define CW1200_BEACON_SKIPPING_MULTIPLIER 3
+
+struct cw1200_udp_port_filter {
+	struct wsm_udp_port_filter_hdr hdr;
+	struct wsm_udp_port_filter dhcp;
+	struct wsm_udp_port_filter upnp;
+} __packed;
+
+struct cw1200_ether_type_filter {
+	struct wsm_ether_type_filter_hdr hdr;
+	struct wsm_ether_type_filter ip;
+	struct wsm_ether_type_filter pae;
+	struct wsm_ether_type_filter wapi;
+} __packed;
+
+static struct cw1200_udp_port_filter cw1200_udp_port_filter_on = {
+	.hdr.nrFilters = 2,
+	.dhcp = {
+		.filterAction = WSM_FILTER_ACTION_FILTER_OUT,
+		.portType = WSM_FILTER_PORT_TYPE_DST,
+		.udpPort = __cpu_to_le16(67),
+	},
+	.upnp = {
+		.filterAction = WSM_FILTER_ACTION_FILTER_OUT,
+		.portType = WSM_FILTER_PORT_TYPE_DST,
+		.udpPort = __cpu_to_le16(1900),
+	},
+	/* Please add other known ports to be filtered out here and
+	 * update nrFilters field in the header.
+	 * Up to 4 filters are allowed. */
+};
+
+static struct wsm_udp_port_filter_hdr cw1200_udp_port_filter_off = {
+	.nrFilters = 0,
+};
+
+#ifndef ETH_P_WAPI
+#define ETH_P_WAPI     0x88B4
+#endif
+
+static struct cw1200_ether_type_filter cw1200_ether_type_filter_on = {
+	.hdr.nrFilters = 3,
+	.ip = {
+		.filterAction = WSM_FILTER_ACTION_FILTER_IN,
+		.etherType = __cpu_to_le16(ETH_P_IP),
+	},
+	.pae = {
+		.filterAction = WSM_FILTER_ACTION_FILTER_IN,
+		.etherType = __cpu_to_le16(ETH_P_PAE),
+	},
+	.wapi = {
+		.filterAction = WSM_FILTER_ACTION_FILTER_IN,
+		.etherType = __cpu_to_le16(ETH_P_WAPI),
+	},
+	/* Please add other known ether types to be filtered out here and
+	 * update nrFilters field in the header.
+	 * Up to 4 filters are allowed. */
+};
+
+static struct wsm_ether_type_filter_hdr cw1200_ether_type_filter_off = {
+	.nrFilters = 0,
+};
 
 static int cw1200_suspend_late(struct device *dev);
 static void cw1200_pm_release(struct device *dev);
@@ -27,6 +91,7 @@ struct cw1200_suspend_state {
 	unsigned long join_tmo;
 	unsigned long direct_probe;
 	unsigned long link_id_gc;
+	bool beacon_skipping;
 };
 
 static const struct dev_pm_ops cw1200_pm_ops = {
@@ -53,7 +118,7 @@ static int cw1200_pm_init_common(struct cw1200_pm_state *pm,
 	pm->pm_dev = platform_device_alloc("cw1200_power", 0);
 	if (!pm->pm_dev) {
 		platform_driver_unregister(&cw1200_power_driver);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	pm->pm_dev->dev.platform_data = priv;
@@ -232,8 +297,18 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 
 	/* Lock TX. */
 	wsm_lock_tx_async(priv);
-	if (priv->hw_bufs_used)
-		goto revert3;
+
+	/* Wait to avoid possible race with bh code.
+	 * But do not wait too long... */
+	if (wait_event_timeout(priv->bh_evt_wq,
+			!priv->hw_bufs_used, HZ / 10) <= 0)
+		goto revert2;
+
+	/* Set UDP filter */
+	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_on.hdr);
+
+	/* Set ethernet frame type filter */
+	wsm_set_ether_type_filter(priv, &cw1200_ether_type_filter_on.hdr);
 
 	/* Allocate state */
 	state = kzalloc(sizeof(struct cw1200_suspend_state), GFP_KERNEL);
@@ -252,6 +327,17 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	state->link_id_gc =
 		cw1200_suspend_work(&priv->link_id_gc_work);
 
+	/* Enable beacon skipping */
+	if (priv->join_status == CW1200_JOIN_STATUS_STA
+			&& priv->join_dtim_period
+			&& !priv->has_multicast_subscription) {
+		state->beacon_skipping = true;
+		wsm_set_beacon_wakeup_period(priv,
+				priv->join_dtim_period,
+				CW1200_BEACON_SKIPPING_MULTIPLIER *
+				 priv->join_dtim_period);
+	}
+
 	/* Stop serving thread */
 	if (cw1200_bh_suspend(priv))
 		goto revert4;
@@ -259,6 +345,9 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	ret = timer_pending(&priv->mcast_timeout);
 	if (ret)
 		goto revert5;
+
+	/* Cancel block ack stat timer */
+	del_timer_sync(&priv->ba_timer);
 
 	/* Store suspend state */
 	pm_state->suspend_state = state;
@@ -296,6 +385,9 @@ revert4:
 			state->link_id_gc);
 	kfree(state);
 revert3:
+	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_off);
+	wsm_set_ether_type_filter(priv, &cw1200_ether_type_filter_off);
+revert2:
 	wsm_unlock_tx(priv);
 	up(&priv->scan.lock);
 revert1:
@@ -318,6 +410,14 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 	/* Resume BH thread */
 	WARN_ON(cw1200_bh_resume(priv));
 
+	if (state->beacon_skipping) {
+		wsm_set_beacon_wakeup_period(priv, priv->beacon_int *
+				priv->join_dtim_period >
+				MAX_BEACON_SKIP_TIME_MS ? 1 :
+				priv->join_dtim_period, 0);
+		state->beacon_skipping = false;
+	}
+
 	/* Resume delayed work */
 	cw1200_resume_work(priv, &priv->bss_loss_work,
 			state->bss_loss_tmo);
@@ -329,6 +429,19 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 			state->direct_probe);
 	cw1200_resume_work(priv, &priv->link_id_gc_work,
 			state->link_id_gc);
+
+	/* Restart block ack stat */
+	spin_lock_bh(&priv->ba_lock);
+	if (priv->ba_cnt)
+		mod_timer(&priv->ba_timer,
+			jiffies + CW1200_BLOCK_ACK_INTERVAL);
+	spin_unlock_bh(&priv->ba_lock);
+
+	/* Remove UDP port filter */
+	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_off);
+
+	/* Remove ethernet frame type filter */
+	wsm_set_ether_type_filter(priv, &cw1200_ether_type_filter_off);
 
 	/* Unlock datapath */
 	wsm_unlock_tx(priv);

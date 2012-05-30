@@ -22,6 +22,10 @@
 
 #define CW1200_LINK_ID_GC_TIMEOUT ((unsigned long)(10 * HZ))
 
+#ifndef ERP_INFO_BYTE_OFFSET
+#define ERP_INFO_BYTE_OFFSET 2
+#endif
+
 static int cw1200_upload_beacon(struct cw1200_common *priv);
 static int cw1200_upload_pspoll(struct cw1200_common *priv);
 static int cw1200_upload_null(struct cw1200_common *priv);
@@ -32,7 +36,7 @@ static int cw1200_enable_beaconing(struct cw1200_common *priv,
 static void __cw1200_sta_notify(struct ieee80211_hw *dev,
 				struct ieee80211_vif *vif,
 				enum sta_notify_cmd notify_cmd,
-				struct ieee80211_sta *sta);
+				int link_id);
 
 /* ******************************************************************** */
 /* AP API								*/
@@ -59,6 +63,9 @@ int cw1200_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 
 	entry = &priv->link_id_db[sta_priv->link_id - 1];
 	spin_lock_bh(&priv->ps_state_lock);
+	if ((sta->uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_MASK) ==
+					IEEE80211_WMM_IE_STA_QOSINFO_AC_MASK)
+		priv->sta_asleep_mask |= BIT(sta_priv->link_id);
 	entry->status = CW1200_LINK_HARD;
 	while ((skb = skb_dequeue(&entry->rx_queue)))
 		ieee80211_rx_irqsafe(priv->hw, skb);
@@ -79,26 +86,32 @@ int cw1200_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 
 	entry = &priv->link_id_db[sta_priv->link_id - 1];
 	spin_lock_bh(&priv->ps_state_lock);
-	entry->status = CW1200_LINK_SOFT;
+	entry->status = CW1200_LINK_RESERVE;
 	entry->timestamp = jiffies;
-	if (!delayed_work_pending(&priv->link_id_gc_work))
-		queue_delayed_work(priv->workqueue,
-				&priv->link_id_gc_work,
-				CW1200_LINK_ID_GC_TIMEOUT);
+	wsm_lock_tx_async(priv);
+	if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
+		wsm_unlock_tx(priv);
 	spin_unlock_bh(&priv->ps_state_lock);
+	flush_workqueue(priv->workqueue);
 	return 0;
 }
 
 static void __cw1200_sta_notify(struct ieee80211_hw *dev,
 				struct ieee80211_vif *vif,
 				enum sta_notify_cmd notify_cmd,
-				struct ieee80211_sta *sta)
+				int link_id)
 {
 	struct cw1200_common *priv = dev->priv;
-	struct cw1200_sta_priv *sta_priv =
-		(struct cw1200_sta_priv *)&sta->drv_priv;
-	u32 bit = BIT(sta_priv->link_id);
-	u32 prev = priv->sta_asleep_mask & bit;
+	u32 bit, prev;
+
+	/* Zero link id means "for all link IDs" */
+	if (link_id)
+		bit = BIT(link_id);
+	else if (WARN_ON_ONCE(notify_cmd != STA_NOTIFY_AWAKE))
+		bit = 0;
+	else
+		bit = priv->link_id_map;
+	prev = priv->sta_asleep_mask & bit;
 
 	switch (notify_cmd) {
 	case STA_NOTIFY_SLEEP:
@@ -114,7 +127,7 @@ static void __cw1200_sta_notify(struct ieee80211_hw *dev,
 		if (prev) {
 			priv->sta_asleep_mask &= ~bit;
 			priv->pspoll_mask &= ~bit;
-			if (priv->tx_multicast &&
+			if (priv->tx_multicast && link_id &&
 					!priv->sta_asleep_mask)
 				queue_work(priv->workqueue,
 					&priv->multicast_stop_work);
@@ -130,31 +143,26 @@ void cw1200_sta_notify(struct ieee80211_hw *dev,
 		       struct ieee80211_sta *sta)
 {
 	struct cw1200_common *priv = dev->priv;
+	struct cw1200_sta_priv *sta_priv =
+		(struct cw1200_sta_priv *)&sta->drv_priv;
+
 	spin_lock_bh(&priv->ps_state_lock);
-	__cw1200_sta_notify(dev, vif, notify_cmd, sta);
+	__cw1200_sta_notify(dev, vif, notify_cmd, sta_priv->link_id);
 	spin_unlock_bh(&priv->ps_state_lock);
 }
 
 static void cw1200_ps_notify(struct cw1200_common *priv,
 		      int link_id, bool ps)
 {
-	struct ieee80211_sta *sta;
-
-	if (!link_id || link_id > CW1200_MAX_STA_IN_AP_MODE)
+	if (link_id > CW1200_MAX_STA_IN_AP_MODE)
 		return;
 
 	txrx_printk(KERN_DEBUG "%s for LinkId: %d. STAs asleep: %.8X\n",
 			ps ? "Stop" : "Start",
 			link_id, priv->sta_asleep_mask);
 
-	rcu_read_lock();
-	sta = ieee80211_find_sta(priv->vif,
-			priv->link_id_db[link_id - 1].mac);
-	if (sta) {
-		__cw1200_sta_notify(priv->hw, priv->vif,
-			ps ? STA_NOTIFY_SLEEP : STA_NOTIFY_AWAKE, sta);
-	}
-	rcu_read_unlock();
+	__cw1200_sta_notify(priv->hw, priv->vif,
+		ps ? STA_NOTIFY_SLEEP : STA_NOTIFY_AWAKE, link_id);
 }
 
 static int cw1200_set_tim_impl(struct cw1200_common *priv, bool aid0_bit_set)
@@ -213,6 +221,38 @@ int cw1200_set_tim(struct ieee80211_hw *dev, struct ieee80211_sta *sta,
 	return 0;
 }
 
+void cw1200_set_cts_work(struct work_struct *work)
+{
+	struct cw1200_common *priv =
+		container_of(work, struct cw1200_common, set_cts_work.work);
+
+	u8 erp_ie[3] = {WLAN_EID_ERP_INFO, 0x1, 0};
+	struct wsm_update_ie update_ie = {
+		.what = WSM_UPDATE_IE_BEACON,
+		.count = 1,
+		.ies = erp_ie,
+		.length = 3,
+	};
+	u32 erp_info;
+	__le32 use_cts_prot;
+	mutex_lock(&priv->conf_mutex);
+	erp_info = priv->erp_info;
+	mutex_unlock(&priv->conf_mutex);
+	use_cts_prot =
+		erp_info & WLAN_ERP_USE_PROTECTION ?
+		__cpu_to_le32(1) : 0;
+
+	erp_ie[ERP_INFO_BYTE_OFFSET] = erp_info;
+
+	ap_printk(KERN_DEBUG "[STA] ERP information 0x%x\n", erp_info);
+
+	WARN_ON(wsm_write_mib(priv, WSM_MIB_ID_NON_ERP_PROTECTION,
+				&use_cts_prot, sizeof(use_cts_prot)));
+	WARN_ON(wsm_update_ie(priv, &update_ie));
+
+	return;
+}
+
 static int cw1200_set_btcoexinfo(struct cw1200_common *priv)
 {
 	struct wsm_override_internal_txrate arg;
@@ -269,7 +309,6 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 			     u32 changed)
 {
 	struct cw1200_common *priv = dev->priv;
-	struct ieee80211_conf *conf = &dev->conf;
 
 	mutex_lock(&priv->conf_mutex);
 	if (changed & BSS_CHANGED_BSSID) {
@@ -356,9 +395,9 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	     BSS_CHANGED_ERP_SLOT)) {
 		ap_printk(KERN_DEBUG "BSS_CHANGED_ASSOC.\n");
 		if (info->assoc) { /* TODO: ibss_joined */
-			int dtim_interval = conf->ps_dtim_period;
-			int listen_interval = conf->listen_interval;
 			struct ieee80211_sta *sta = NULL;
+			priv->join_dtim_period = info->dtim_period;
+			priv->beacon_int = info->beacon_int;
 
 			/* Associated: kill join timeout */
 			cancel_delayed_work_sync(&priv->join_timeout);
@@ -433,15 +472,11 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 
 			priv->bss_params.aid = info->aid;
 
-			if (dtim_interval < 1)
-				dtim_interval = 1;
-			if (dtim_interval < priv->join_dtim_period)
-				dtim_interval = priv->join_dtim_period;
-			if (listen_interval < dtim_interval)
-				listen_interval = 0;
+			if (priv->join_dtim_period < 1)
+				priv->join_dtim_period = 1;
 
-			ap_printk(KERN_DEBUG "[STA] DTIM %d, listen %d\n",
-				dtim_interval, listen_interval);
+			ap_printk(KERN_DEBUG "[STA] DTIM %d, interval: %d\n",
+				priv->join_dtim_period, priv->beacon_int);
 			ap_printk(KERN_DEBUG "[STA] Preamble: %d, " \
 				"Greenfield: %d, Aid: %d, " \
 				"Rates: 0x%.8X, Basic: 0x%.8X\n",
@@ -452,11 +487,22 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				priv->association_mode.basicRateSet);
 			WARN_ON(wsm_set_association_mode(priv,
 				&priv->association_mode));
+			WARN_ON(wsm_keep_alive_period(priv, 30 /* sec */));
 			WARN_ON(wsm_set_bss_params(priv, &priv->bss_params));
 			priv->setbssparams_done = true;
 			WARN_ON(wsm_set_beacon_wakeup_period(priv,
-				dtim_interval, listen_interval));
+				    priv->beacon_int * priv->join_dtim_period >
+				    MAX_BEACON_SKIP_TIME_MS ? 1 :
+				    priv->join_dtim_period, 0));
+
 			cw1200_set_pm(priv, &priv->powersave_mode);
+			if (priv->vif->p2p) {
+				ap_printk(KERN_DEBUG
+					"[STA] Setting p2p powersave "
+					"configuration.\n");
+				WARN_ON(wsm_set_p2p_ps_modeinfo(priv,
+					&priv->p2p_ps_modeinfo));
+			}
 
 			if (priv->is_BT_Present)
 				WARN_ON(cw1200_set_btcoexinfo(priv));
@@ -492,14 +538,18 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 		}
 	}
 	if (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_ERP_CTS_PROT)) {
-		__le32 use_cts_prot = info->use_cts_prot ?
-			__cpu_to_le32(1) : 0;
+		u32 prev_erp_info = priv->erp_info;
 
-		ap_printk(KERN_DEBUG "[STA] CTS protection %d\n",
-			info->use_cts_prot);
-		WARN_ON(wsm_write_mib(priv, WSM_MIB_ID_NON_ERP_PROTECTION,
-			&use_cts_prot, sizeof(use_cts_prot)));
+		if (info->use_cts_prot)
+			priv->erp_info |= WLAN_ERP_USE_PROTECTION;
+		else if (!(prev_erp_info & WLAN_ERP_NON_ERP_PRESENT))
+			priv->erp_info &= ~WLAN_ERP_USE_PROTECTION;
+
+		if (prev_erp_info != priv->erp_info)
+			queue_delayed_work(priv->workqueue,
+					&priv->set_cts_work, 0*HZ);
 	}
+
 	if (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_ERP_SLOT)) {
 		__le32 slot_time = info->use_short_slot ?
 			__cpu_to_le32(9) : __cpu_to_le32(20);
@@ -510,8 +560,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	}
 	if (changed & (BSS_CHANGED_ASSOC | BSS_CHANGED_CQM)) {
 		struct wsm_rcpi_rssi_threshold threshold = {
-			.rssiRcpiMode = WSM_RCPI_RSSI_USE_RSSI,
-			.rollingAverageCount = 1,
+			.rollingAverageCount = 8,
 		};
 
 #if 0
@@ -565,8 +614,13 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				priv->cqm_beacon_loss_count ?
 				priv->cqm_beacon_loss_count :
 				priv->cqm_link_loss_count;
-			WARN_ON(wsm_set_bss_params(priv, &priv->bss_params));
-			priv->setbssparams_done = true;
+			/* Make sure we are associated before sending
+			 * set_bss_params to firmware */
+			if (priv->bss_params.aid) {
+				WARN_ON(wsm_set_bss_params(priv,
+					&priv->bss_params));
+				priv->setbssparams_done = true;
+			}
 		}
 #endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
 	}
@@ -580,11 +634,13 @@ void cw1200_multicast_start_work(struct work_struct *work)
 	long tmo = priv->join_dtim_period *
 			(priv->beacon_int + 20) * HZ / 1024;
 
+	cancel_work_sync(&priv->multicast_stop_work);
+
 	if (!priv->aid0_bit_set) {
 		wsm_lock_tx(priv);
 		cw1200_set_tim_impl(priv, true);
 		priv->aid0_bit_set = true;
-		mod_timer(&priv->mcast_timeout, tmo);
+		mod_timer(&priv->mcast_timeout, jiffies + tmo);
 		wsm_unlock_tx(priv);
 	}
 }
@@ -595,6 +651,7 @@ void cw1200_multicast_stop_work(struct work_struct *work)
 		container_of(work, struct cw1200_common, multicast_stop_work);
 
 	if (priv->aid0_bit_set) {
+		del_timer_sync(&priv->mcast_timeout);
 		wsm_lock_tx(priv);
 		priv->aid0_bit_set = false;
 		cw1200_set_tim_impl(priv, false);
@@ -607,6 +664,8 @@ void cw1200_mcast_timeout(unsigned long arg)
 	struct cw1200_common *priv =
 		(struct cw1200_common *)arg;
 
+	wiphy_warn(priv->hw->wiphy,
+		"Multicast delivery timeout.\n");
 	spin_lock_bh(&priv->ps_state_lock);
 	priv->tx_multicast = priv->aid0_bit_set &&
 			priv->buffered_multicasts;
@@ -633,12 +692,9 @@ int cw1200_ampdu_action(struct ieee80211_hw *hw,
 void cw1200_suspend_resume(struct cw1200_common *priv,
 			  struct wsm_suspend_resume *arg)
 {
-	/* if () is intendend to protect against spam. FW sends
-	 * "start multicast" request on every DTIM. */
-	if (arg->stop || !arg->multicast || priv->buffered_multicasts)
-		ap_printk(KERN_DEBUG "[AP] %s: %s\n",
-				arg->stop ? "stop" : "start",
-				arg->multicast ? "broadcast" : "unicast");
+	ap_printk(KERN_DEBUG "[AP] %s: %s\n",
+			arg->stop ? "stop" : "start",
+			arg->multicast ? "broadcast" : "unicast");
 
 	if (arg->multicast) {
 		bool cancel_tmo = false;
@@ -684,11 +740,37 @@ static int cw1200_upload_beacon(struct cw1200_common *priv)
 	struct wsm_template_frame frame = {
 		.frame_type = WSM_FRAME_TYPE_BEACON,
 	};
+	struct ieee80211_mgmt *mgmt;
+	u8 *erp_inf, *ies;
+	u32 ies_len;
 
+	if (priv->vif->p2p)
+		frame.rate = WSM_TRANSMIT_RATE_6;
 
 	frame.skb = ieee80211_beacon_get(priv->hw, priv->vif);
 	if (WARN_ON(!frame.skb))
 		return -ENOMEM;
+
+	mgmt = (void *)frame.skb->data;
+	ies = mgmt->u.beacon.variable;
+	ies_len = frame.skb->len - (u32)(ies - (u8 *)mgmt);
+	erp_inf = (u8 *)cfg80211_find_ie(WLAN_EID_ERP_INFO, ies, ies_len);
+	if (erp_inf) {
+		if (erp_inf[ERP_INFO_BYTE_OFFSET]
+				& WLAN_ERP_BARKER_PREAMBLE)
+			priv->erp_info |= WLAN_ERP_BARKER_PREAMBLE;
+		else
+			priv->erp_info &= ~WLAN_ERP_BARKER_PREAMBLE;
+
+		if (erp_inf[ERP_INFO_BYTE_OFFSET]
+				& WLAN_ERP_NON_ERP_PRESENT) {
+			priv->erp_info |= WLAN_ERP_USE_PROTECTION;
+			priv->erp_info |= WLAN_ERP_NON_ERP_PRESENT;
+		} else {
+			priv->erp_info &= ~WLAN_ERP_USE_PROTECTION;
+			priv->erp_info &= ~WLAN_ERP_NON_ERP_PRESENT;
+		}
+	}
 
 	ret = wsm_set_template_frame(priv, &frame);
 	if (!ret) {
@@ -698,6 +780,8 @@ static int cw1200_upload_beacon(struct cw1200_common *priv)
 			__cpu_to_le16(IEEE80211_FTYPE_MGMT |
 				      IEEE80211_STYPE_PROBE_RESP);
 		frame.frame_type = WSM_FRAME_TYPE_PROBE_RESPONSE;
+		if (priv->vif->p2p)
+			frame.disable = true;
 		ret = wsm_set_template_frame(priv, &frame);
 	}
 	dev_kfree_skb(frame.skb);
@@ -777,6 +861,10 @@ static int cw1200_start_ap(struct cw1200_common *priv)
 		.basicRateSet = cw1200_rate_mask_to_wsm(priv,
 				conf->basic_rates),
 	};
+	struct wsm_operational_mode mode = {
+		.power_mode = cw1200_power_mode,
+		.disableMoreFlagUsage = true,
+	};
 
 	/* Get SSID */
 	skb = ieee80211_beacon_get(priv->hw, priv->vif);
@@ -815,12 +903,20 @@ static int cw1200_start_ap(struct cw1200_common *priv)
 	ret = WARN_ON(wsm_start(priv, &start));
 	if (!ret)
 		ret = WARN_ON(cw1200_upload_keys(priv));
+	if (!ret && priv->vif->p2p) {
+		ap_printk(KERN_DEBUG
+			"[AP] Setting p2p powersave "
+			"configuration.\n");
+		WARN_ON(wsm_set_p2p_ps_modeinfo(priv,
+			&priv->p2p_ps_modeinfo));
+	}
 	if (!ret) {
 		WARN_ON(wsm_set_block_ack_policy(priv,
 			0, 0));
 		priv->join_status = CW1200_JOIN_STATUS_AP;
 		cw1200_update_filtering(priv);
 	}
+	WARN_ON(wsm_set_operational_mode(priv, &mode));
 	return ret;
 }
 
@@ -979,8 +1075,30 @@ void cw1200_link_id_gc_work(struct work_struct *work)
 				WARN_ON(wsm_reset(priv, &reset));
 				spin_lock_bh(&priv->ps_state_lock);
 			} else {
-				next_gc = min(next_gc, (unsigned long)ttl);
+				next_gc = min_t(unsigned long, next_gc, ttl);
 			}
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+		} else if (priv->link_id_db[i].status == CW1200_LINK_RESET ||
+				priv->link_id_db[i].status ==
+				CW1200_LINK_RESET_REMAP) {
+			int status = priv->link_id_db[i].status;
+			priv->link_id_db[i].status =
+					priv->link_id_db[i].prev_status;
+			priv->link_id_db[i].timestamp = now;
+			reset.link_id = i + 1;
+			spin_unlock_bh(&priv->ps_state_lock);
+			WARN_ON(wsm_reset(priv, &reset));
+			if (status == CW1200_LINK_RESET_REMAP) {
+				memcpy(map_link.mac_addr,
+						priv->link_id_db[i].mac,
+						ETH_ALEN);
+				map_link.link_id = i + 1;
+				WARN_ON(wsm_map_link(priv, &map_link));
+				next_gc = min(next_gc,
+						CW1200_LINK_ID_GC_TIMEOUT);
+			}
+			spin_lock_bh(&priv->ps_state_lock);
+#endif
 		}
 		if (need_reset) {
 			skb_queue_purge(&priv->link_id_db[i].rx_queue);
@@ -995,3 +1113,39 @@ void cw1200_link_id_gc_work(struct work_struct *work)
 	wsm_unlock_tx(priv);
 }
 
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+void cw1200_notify_noa(struct cw1200_common *priv, int delay)
+{
+	struct cfg80211_p2p_ps p2p_ps = {0};
+	struct wsm_p2p_ps_modeinfo *modeinfo;
+	modeinfo = &priv->p2p_ps_modeinfo;
+
+	ap_printk(KERN_DEBUG "[AP]: %s called\n", __func__);
+
+	if (priv->join_status != CW1200_JOIN_STATUS_AP)
+		return;
+
+	if (delay)
+		msleep(delay);
+
+	if (!WARN_ON(wsm_get_p2p_ps_modeinfo(priv, modeinfo))) {
+#if defined(CONFIG_CW1200_STA_DEBUG)
+		print_hex_dump_bytes("[AP] p2p_get_ps_modeinfo: ",
+				     DUMP_PREFIX_NONE,
+				     (u8 *)modeinfo,
+				     sizeof(*modeinfo));
+#endif /* CONFIG_CW1200_STA_DEBUG */
+		p2p_ps.opp_ps = !!(modeinfo->oppPsCTWindow & BIT(7));
+		p2p_ps.ctwindow = modeinfo->oppPsCTWindow & (~BIT(7));
+		p2p_ps.count = modeinfo->count;
+		p2p_ps.start = __le32_to_cpu(modeinfo->startTime);
+		p2p_ps.duration = __le32_to_cpu(modeinfo->duration);
+		p2p_ps.interval = __le32_to_cpu(modeinfo->interval);
+		p2p_ps.index = modeinfo->reserved;
+
+		ieee80211_p2p_noa_notify(priv->vif,
+					 &p2p_ps,
+					 GFP_KERNEL);
+	}
+}
+#endif

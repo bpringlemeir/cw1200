@@ -13,7 +13,7 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/version.h>
+#include <linux/compat.h>
 #include <linux/module.h>
 #include <linux/gpio.h>
 #include <linux/delay.h>
@@ -33,7 +33,9 @@ MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SPI driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("spi:cw1200_wlan_spi");
 
-//#define USE_IRQ_WAKE
+#ifdef CONFIG_CW1200_PM
+#define USE_IRQ_WAKE
+#endif
 //#define USE_INTERNAL_RESOURCE_LIST
 // XXX The intent is that this info is part of the board platform data in arch/mach-xxxx/mach-yyyy.c
 
@@ -351,7 +353,7 @@ static int cw1200_spi_on(const struct cw1200_platform_data *pdata)
 	/* A valid reset shall be obtained by maintaining WRESETN
 	 * active (low) for at least two cycles of LP_CLK after VDDIO
 	 * is stable within it operating range. */
-	msleep(50);
+	usleep_range(1000, 20000);
 	gpio_set_value(reset->start, 1);
 	/* The host should wait 30 ms after the WRESETN release
 	 * for the on-chip LDO to stabilize */
@@ -372,6 +374,21 @@ static size_t cw1200_spi_align_size(struct sbus_priv *self, size_t size)
 	return size & 1 ? size + 1 : size;
 }
 
+#ifdef CONFIG_CW1200_PM
+static int cw1200_spi_pm(struct sbus_priv *self, bool suspend)
+{
+	int ret = 0;
+	const struct resource *irq = self->pdata->irq;
+
+#ifdef USE_IRQ_WAKE
+	if (irq)
+		ret = irq_set_irq_wake(irq->start, suspend);
+#endif
+
+	return ret;
+}
+#endif
+
 static struct sbus_ops cw1200_spi_sbus_ops = {
 	.sbus_memcpy_fromio	= cw1200_spi_memcpy_fromio,
 	.sbus_memcpy_toio	= cw1200_spi_memcpy_toio,
@@ -382,7 +399,7 @@ static struct sbus_ops cw1200_spi_sbus_ops = {
 	.reset			= cw1200_spi_reset,
 	.align_size		= cw1200_spi_align_size,
 #ifdef CONFIG_CW1200_PM
-	.power_mgmt		= cw1200_spi_pm, // XXX not implemented.
+	.power_mgmt		= cw1200_spi_pm,
 #endif
 	.irq_enable             = cw1200_spi_irq_enable,
 };
@@ -428,7 +445,6 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 	spin_lock_init(&self->lock);
 	self->pdata = plat_data;
 	self->func = func;
-	spi_set_drvdata(func, self);
 
 	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
 				   self, &func->dev, &self->core, 
@@ -453,26 +469,9 @@ static int __devexit cw1200_spi_disconnect(struct spi_device *func)
 	return 0;
 }
 
-static int cw1200_spi_suspend(struct spi_device *spi, pm_message_t mesg)
-{
-	struct sbus_priv *self = spi_get_drvdata(spi);
-	const struct resource *irq = self->pdata ? self->pdata->irq : NULL;
-	if(irq) disable_irq(irq->start);
-	return 0;
-}
-static int cw1200_spi_resume(struct spi_device *spi)
-{
-	struct sbus_priv *self = spi_get_drvdata(spi);
-	const struct resource *irq = self->pdata ? self->pdata->irq : NULL;
-	if(irq) enable_irq(irq->start);
-	return 0;
-}
-
 static struct spi_driver spi_driver = {
 	.probe		= cw1200_spi_probe,
 	.remove		= __devexit_p(cw1200_spi_disconnect),
-	.suspend    = cw1200_spi_suspend,
-	.resume     = cw1200_spi_resume,
 	.driver = {
 		.name		= "cw1200_wlan_spi",
 		.bus            = &spi_bus_type,

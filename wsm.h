@@ -495,7 +495,8 @@ struct cw1200_common;
 /* 4.37 GroupTxSequenceCounter */
 #define WSM_MIB_ID_GRP_SEQ_COUNTER		0x101F
 
-/* 1020 4.38 ProtectedMgmtPolicy */
+/* 4.38 ProtectedMgmtPolicy */
+#define WSM_MIB_ID_PROTECTED_MGMT_POLICY	0x1020
 
 /* 4.39 SetHtProtection */
 #define WSM_MID_ID_SET_HT_PROTECTION		0x1021
@@ -571,6 +572,17 @@ struct cw1200_common;
 /* This is applicable only to Transmit */
 #define WSM_REQUEUE                     (11)
 
+/* Advanced filtering options */
+#define WSM_MAX_FILTER_ELEMENTS		(4)
+
+#define WSM_FILTER_ACTION_IGNORE	(0)
+#define WSM_FILTER_ACTION_FILTER_IN	(1)
+#define WSM_FILTER_ACTION_FILTER_OUT	(2)
+
+#define WSM_FILTER_PORT_TYPE_DST	(0)
+#define WSM_FILTER_PORT_TYPE_SRC	(1)
+
+
 
 struct wsm_hdr {
 	__le16 len;
@@ -583,6 +595,10 @@ struct wsm_hdr {
 #define WSM_TX_LINK_ID_MAX		(0x0F)
 #define WSM_TX_LINK_ID(link_id)		\
 		((link_id & WSM_TX_LINK_ID_MAX) << 6)
+
+#define MAX_BEACON_SKIP_TIME_MS 1000
+
+#define WSM_CMD_LAST_CHANCE_TIMEOUT (HZ * 3 / 2)
 
 /* ******************************************************************** */
 /* WSM capcbility							*/
@@ -1035,12 +1051,6 @@ int wsm_remove_key(struct cw1200_common *priv,
 
 /* 3.34 */
 struct wsm_set_tx_queue_params {
-	/* 0 best effort/legacy */
-	/* 1 background */
-	/* 2 video */
-	/* 3 voice */
-	u8 queueId;
-
 	/* WSM_ACK_POLICY_... */
 	u8 ackPolicy;
 
@@ -1053,8 +1063,23 @@ struct wsm_set_tx_queue_params {
 	u32 maxTransmitLifetime;
 };
 
+struct wsm_tx_queue_params {
+	/* NOTE: index is a linux queue id. */
+	struct wsm_set_tx_queue_params params[4];
+};
+
+
+#define WSM_TX_QUEUE_SET(queue_params, queue, ack_policy, allowed_time,\
+		max_life_time)	\
+do {							\
+	struct wsm_set_tx_queue_params *p = &(queue_params)->params[queue]; \
+	p->ackPolicy = (ack_policy);				\
+	p->allowedMediumTime = (allowed_time);				\
+	p->maxTransmitLifetime = (max_life_time);			\
+} while (0)
+
 int wsm_set_tx_queue_params(struct cw1200_common *priv,
-			    const struct wsm_set_tx_queue_params *arg);
+			    const struct wsm_set_tx_queue_params *arg, u8 id);
 
 /* 3.36 */
 struct wsm_edca_queue_params {
@@ -1084,13 +1109,16 @@ struct wsm_edca_params {
 	struct wsm_edca_queue_params params[4];
 };
 
-#define WSM_EDCA_SET(edca, queue, aifs, cw_min, cw_max, txop, uapsd)	\
+#define TXOP_UNIT 32
+#define WSM_EDCA_SET(edca, queue, aifs, cw_min, cw_max, txop, life_time,\
+		uapsd)	\
 	do {							\
 		struct wsm_edca_queue_params *p = &(edca)->params[queue]; \
 		p->cwMin = (cw_min);				\
 		p->cwMax = (cw_max);				\
 		p->aifns = (aifs);				\
-		p->txOpLimit = (txop);				\
+		p->txOpLimit = ((txop) * TXOP_UNIT);		\
+		p->maxReceiveLifetime = (life_time);		\
 		p->uapsdEnable = (uapsd);			\
 	} while (0)
 
@@ -1249,6 +1277,7 @@ static inline int wsm_set_beacon_wakeup_period(struct cw1200_common *priv,
 	} val = {
 		dtim_interval, 0, __cpu_to_le16(listen_interval)
 	};
+	printk(KERN_INFO "DTIM %d listen %d\n", dtim_interval, listen_interval);
 	if (dtim_interval > 0xFF || listen_interval > 0xFFFF)
 		return -EINVAL;
 	else
@@ -1397,6 +1426,7 @@ static inline int wsm_set_operational_mode(struct cw1200_common *priv,
 struct wsm_template_frame {
 	u8 frame_type;
 	u8 rate;
+	bool disable;
 	struct sk_buff *skb;
 };
 
@@ -1407,9 +1437,35 @@ static inline int wsm_set_template_frame(struct cw1200_common *priv,
 	u8 *p = skb_push(arg->skb, 4);
 	p[0] = arg->frame_type;
 	p[1] = arg->rate;
-	((u16 *) p)[1] = __cpu_to_le16(arg->skb->len - 4);
+	if (arg->disable)
+		((u16 *) p)[1] = 0;
+	else
+		((u16 *) p)[1] = __cpu_to_le16(arg->skb->len - 4);
 	ret = wsm_write_mib(priv, WSM_MIB_ID_TEMPLATE_FRAME, p, arg->skb->len);
 	skb_pull(arg->skb, 4);
+	return ret;
+}
+
+
+struct wsm_protected_mgmt_policy {
+	bool protectedMgmtEnable;
+	bool unprotectedMgmtFramesAllowed;
+	bool encryptionForAuthFrame;
+};
+
+static inline int wsm_set_protected_mgmt_policy(struct cw1200_common *priv,
+		struct wsm_protected_mgmt_policy *arg)
+{
+	__le32 val = 0;
+	int ret;
+	if (arg->protectedMgmtEnable)
+		val |= __cpu_to_le32(BIT(0));
+	if (arg->unprotectedMgmtFramesAllowed)
+		val |= __cpu_to_le32(BIT(1));
+	if (arg->encryptionForAuthFrame)
+		val |= __cpu_to_le32(BIT(2));
+	ret = wsm_write_mib(priv, WSM_MIB_ID_PROTECTED_MGMT_POLICY,
+			&val, sizeof(val));
 	return ret;
 }
 
@@ -1473,6 +1529,49 @@ static inline int wsm_set_tx_rate_retry_policy(struct cw1200_common *priv,
 	    sizeof(struct wsm_set_tx_rate_retry_policy_policy);
 	return wsm_write_mib(priv, WSM_MIB_ID_SET_TX_RATE_RETRY_POLICY, arg,
 			     size);
+}
+
+/* 4.32 SetEtherTypeDataFrameFilter */
+struct wsm_ether_type_filter_hdr {
+	u8 nrFilters;		/* Up to WSM_MAX_FILTER_ELEMENTS */
+	u8 reserved[3];
+} __packed;
+
+struct wsm_ether_type_filter {
+	u8 filterAction;	/* WSM_FILTER_ACTION_XXX */
+	u8 reserved;
+	__le16 etherType;	/* Type of ethernet frame */
+} __packed;
+
+static inline int wsm_set_ether_type_filter(struct cw1200_common *priv,
+				struct wsm_ether_type_filter_hdr *arg)
+{
+	size_t size = sizeof(struct wsm_ether_type_filter_hdr) +
+		arg->nrFilters * sizeof(struct wsm_ether_type_filter);
+	return wsm_write_mib(priv, WSM_MIB_ID_SET_ETHERTYPE_DATAFRAME_FILTER,
+		arg, size);
+}
+
+
+/* 4.33 SetUDPPortDataFrameFilter */
+struct wsm_udp_port_filter_hdr {
+	u8 nrFilters;		/* Up to WSM_MAX_FILTER_ELEMENTS */
+	u8 reserved[3];
+} __packed;
+
+struct wsm_udp_port_filter {
+	u8 filterAction;	/* WSM_FILTER_ACTION_XXX */
+	u8 portType;		/* WSM_FILTER_PORT_TYPE_XXX */
+	__le16 udpPort;		/* Port number */
+} __packed;
+
+static inline int wsm_set_udp_port_filter(struct cw1200_common *priv,
+				struct wsm_udp_port_filter_hdr *arg)
+{
+	size_t size = sizeof(struct wsm_udp_port_filter_hdr) +
+		arg->nrFilters * sizeof(struct wsm_udp_port_filter);
+	return wsm_write_mib(priv, WSM_MIB_ID_SET_UDPPORT_DATAFRAME_FILTER,
+		arg, size);
 }
 
 /* Undocumented MIBs: */
@@ -1617,6 +1716,13 @@ static inline int wsm_set_p2p_ps_modeinfo(struct cw1200_common *priv,
 			     mi, sizeof(*mi));
 }
 
+static inline int wsm_get_p2p_ps_modeinfo(struct cw1200_common *priv,
+					  struct wsm_p2p_ps_modeinfo *mi)
+{
+	return wsm_read_mib(priv, WSM_MIB_ID_P2P_PS_MODE_INFO,
+			    mi, sizeof(*mi));
+}
+
 /* UseMultiTxConfMessage */
 
 static inline int wsm_use_multi_tx_conf(struct cw1200_common *priv,
@@ -1663,13 +1769,13 @@ static inline int wsm_set_override_internal_txrate(struct cw1200_common *priv,
 
 void wsm_lock_tx(struct cw1200_common *priv);
 void wsm_lock_tx_async(struct cw1200_common *priv);
-void wsm_flush_tx(struct cw1200_common *priv);
+bool wsm_flush_tx(struct cw1200_common *priv);
 void wsm_unlock_tx(struct cw1200_common *priv);
 
 /* ******************************************************************** */
 /* WSM / BH API								*/
 
-int wsm_handle_exception(struct cw1200_common *priv, u8 * data, size_t len);
+int wsm_handle_exception(struct cw1200_common *priv, u8 *data, size_t len);
 int wsm_handle_rx(struct cw1200_common *priv, u16 id, struct wsm_hdr *wsm,
 		  struct sk_buff **skb_p);
 
@@ -1701,8 +1807,9 @@ struct wsm_cmd {
 /* ******************************************************************** */
 /* WSM TX buffer access							*/
 
-int wsm_get_tx(struct cw1200_common *priv, u8 ** data, size_t * tx_len);
-void wsm_txed(struct cw1200_common *priv, u8 * data);
+int wsm_get_tx(struct cw1200_common *priv, u8 **data,
+	       size_t *tx_len, int *burst);
+void wsm_txed(struct cw1200_common *priv, u8 *data);
 
 /* ******************************************************************** */
 /* Queue mapping: WSM <---> linux					*/

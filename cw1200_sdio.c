@@ -79,8 +79,8 @@ struct cw1200_platform_data cw1200_platform_data = {
 #ifdef CONFIG_CW1200_USE_GPIO_IRQ
 	.irq = &cw1200_href_resources[1],
 #endif
-//	.power_ctrl = cw1200_power_ctrl,
-//	.clk_ctrl = cw1200_clk_ctrl,
+	.power_ctrl = cw1200_power_ctrl,
+	.clk_ctrl = cw1200_clk_ctrl,
 };
 
 const struct cw1200_platform_data *cw1200_get_platform_data(void)
@@ -334,7 +334,7 @@ static int cw1200_sdio_on(const struct cw1200_platform_data *pdata)
 	/* A valid reset shall be obtained by maintaining WRESETN
 	 * active (low) for at least two cycles of LP_CLK after VDDIO
 	 * is stable within it operating range. */
-	msleep(50); // XXX was 1
+	usleep_range(1000, 20000);
 	gpio_set_value(reset->start, 1);
 	/* The host should wait 32 ms after the WRESETN release
 	 * for the on-chip LDO to stabilize */
@@ -355,18 +355,8 @@ static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 {
 #if defined(CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES)
 	size = sdio_align_size(self->func, size);
-#if 0
-	/* HACK!!! Problems with DMA size on u8500 platform  */
-	if ((size & 0x1F) && (size & ~0x1F)) {
-		size &= ~0x1F;
-		size += 0x20;
-	}
-#endif
 #else /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
-	if (size & (SDIO_BLOCK_SIZE - 1)) {
-		size &= ~(SDIO_BLOCK_SIZE - 1);
-		size += SDIO_BLOCK_SIZE;
-	}
+	size = round_up(size, SDIO_BLOCK_SIZE); 
 #endif /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
 
 #ifdef CONFIG_CW1200_SDIO_CMD53_WORKAROUND
@@ -378,20 +368,12 @@ static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 }
 
 #ifdef CONFIG_CW1200_PM
-static int cw1200_sdio_pm(struct sbus_priv *self, bool  suspend)
+static int cw1200_sdio_pm(struct sbus_priv *self, bool suspend)
 {
-	int ret;
+	int ret = 0;
 	const struct resource *irq = self->pdata->irq;
-	struct sdio_func *func = self->func;
 
-	sdio_claim_host(func);
-	if (suspend)
-		ret = mmc_host_disable(func->card->host);
-	else
-		ret = mmc_host_enable(func->card->host);
-	sdio_release_host(func);
-
-	if (!ret && irq)
+	if (irq)
 		ret = irq_set_irq_wake(irq->start, suspend);
 
 	return ret;
@@ -470,11 +452,38 @@ static void __devexit cw1200_sdio_disconnect(struct sdio_func *func)
 	}
 }
 
+static int cw1200_suspend(struct device *dev)
+{
+	int ret;
+	struct sdio_func *func = dev_to_sdio_func(dev);
+
+	/* Notify SDIO that CW1200 will remain powered during suspend */
+	ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
+	if (ret)
+		cw1200_dbg(CW1200_DBG_ERROR,
+			   "Error setting SDIO pm flags: %i\n", ret);
+
+	return ret;
+}
+
+static int cw1200_resume(struct device *dev)
+{
+	return 0;
+}
+
+static const struct dev_pm_ops cw1200_pm_ops = {
+	.suspend = cw1200_suspend,
+	.resume = cw1200_resume,
+};
+
 static struct sdio_driver sdio_driver = {
 	.name		= "cw1200_wlan_sdio",
 	.id_table	= cw1200_sdio_ids,
 	.probe		= cw1200_sdio_probe,
 	.remove		= __devexit_p(cw1200_sdio_disconnect),
+	.drv = {
+		.pm = &cw1200_pm_ops,
+	}
 };
 
 /* Init Module function -> Called by insmod */

@@ -20,6 +20,7 @@
  * published by the Free Software Foundation.
  */
 
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/firmware.h>
 #include <linux/etherdevice.h>
@@ -50,9 +51,9 @@ static u8 cw1200_mac_template[ETH_ALEN] = {0x02, 0x80, 0xe1, 0x00, 0x00, 0x00};
 module_param_array_named(macaddr, cw1200_mac_template, byte, NULL, S_IRUGO);
 MODULE_PARM_DESC(macaddr, "MAC address");
 
-static int power_mode = wsm_power_mode_quiescent;
-module_param(power_mode, int, 0644);
-MODULE_PARM_DESC(power_mode, "WSM power mode.  0 == active, 1 == doze, 2 == quiescent (default)");
+int cw1200_power_mode = wsm_power_mode_quiescent;
+module_param(cw1200_power_mode, int, 0644);
+MODULE_PARM_DESC(cw1200_power_mode, "WSM power mode.  0 == active, 1 == doze, 2 == quiescent (default)");
 
 #ifdef CONFIG_CW1200_ETF
 int etf_mode = 0;
@@ -137,7 +138,6 @@ static struct ieee80211_channel cw1200_2ghz_chantable[] = {
 	CHAN2G(14, 2484, 0),
 };
 
-#ifdef CONFIG_CW1200_5GHZ_SUPPORT
 static struct ieee80211_channel cw1200_5ghz_chantable[] = {
 	CHAN5G(34, 0),		CHAN5G(36, 0),
 	CHAN5G(38, 0),		CHAN5G(40, 0),
@@ -159,7 +159,6 @@ static struct ieee80211_channel cw1200_5ghz_chantable[] = {
 	CHAN5G(208, 0),		CHAN5G(212, 0),
 	CHAN5G(216, 0),
 };
-#endif /* CONFIG_CW1200_5GHZ_SUPPORT */
 
 static struct ieee80211_supported_band cw1200_band_2ghz = {
 	.channels = cw1200_2ghz_chantable,
@@ -167,11 +166,8 @@ static struct ieee80211_supported_band cw1200_band_2ghz = {
 	.bitrates = cw1200_g_rates,
 	.n_bitrates = cw1200_g_rates_size,
 	.ht_cap = {
-		.cap = IEEE80211_HT_CAP_SM_PS |
-			IEEE80211_HT_CAP_GRN_FLD |
-			/* HT Rx STBC: Rx support of one spatial stream */
-			0x0100 |
-			IEEE80211_HT_CAP_DELAY_BA |
+		.cap = IEEE80211_HT_CAP_GRN_FLD |
+			(1 << IEEE80211_HT_CAP_RX_STBC_SHIFT) |
 			IEEE80211_HT_CAP_MAX_AMSDU,
 		.ht_supported = 1,
 		.ampdu_factor = IEEE80211_HT_MAX_AMPDU_8K,
@@ -184,18 +180,14 @@ static struct ieee80211_supported_band cw1200_band_2ghz = {
 	},
 };
 
-#ifdef CONFIG_CW1200_5GHZ_SUPPORT
 static struct ieee80211_supported_band cw1200_band_5ghz = {
 	.channels = cw1200_5ghz_chantable,
 	.n_channels = ARRAY_SIZE(cw1200_5ghz_chantable),
 	.bitrates = cw1200_a_rates,
 	.n_bitrates = cw1200_a_rates_size,
 	.ht_cap = {
-		.cap = IEEE80211_HT_CAP_SM_PS |
-			IEEE80211_HT_CAP_GRN_FLD |
-			/* HT Rx STBC: Rx support of one spatial stream */
-			0x0100 |
-			IEEE80211_HT_CAP_DELAY_BA |
+		.cap = IEEE80211_HT_CAP_GRN_FLD |
+			(1 << IEEE80211_HT_CAP_RX_STBC_SHIFT) |
 			IEEE80211_HT_CAP_MAX_AMSDU,
 		.ht_supported = 1,
 		.ampdu_factor = IEEE80211_HT_MAX_AMPDU_8K,
@@ -207,7 +199,6 @@ static struct ieee80211_supported_band cw1200_band_5ghz = {
 		},
 	},
 };
-#endif /* CONFIG_CW1200_5GHZ_SUPPORT */
 
 static const unsigned long cw1200_ttl[] = {
 	1 * HZ,	/* VO */
@@ -268,9 +259,11 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	hw->flags = IEEE80211_HW_SIGNAL_DBM |
 		    IEEE80211_HW_SUPPORTS_PS |
 		    IEEE80211_HW_SUPPORTS_DYNAMIC_PS |
+		    IEEE80211_HW_REPORTS_TX_ACK_STATUS |
 		    IEEE80211_HW_SUPPORTS_UAPSD |
 		    IEEE80211_HW_CONNECTION_MONITOR |
 		    IEEE80211_HW_SUPPORTS_CQM_RSSI |
+		    IEEE80211_HW_NEED_DTIM_PERIOD |
 		    /* Aggregation is fully controlled by firmware.
 		     * Do not need any support from the mac80211 stack */
 		    /* IEEE80211_HW_AMPDU_AGGREGATION | */
@@ -299,14 +292,14 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	hw->wiphy->flags |= WIPHY_FLAG_AP_UAPSD;
 #endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
 
+#if defined(CONFIG_CW1200_DISABLE_BEACON_HINTS)
+	hw->wiphy->flags |= WIPHY_FLAG_DISABLE_BEACON_HINTS;
+#endif
+
 	hw->channel_change_time = 1000;	/* TODO: find actual value */
 	/* priv->beacon_req_id = cpu_to_le32(0); */
 	hw->queues = 4;
 	priv->noise = -94;
-
-	/* Init power_mode */
-	priv->power_mode.power_mode = power_mode;
-	priv->power_mode.disableMoreFlagUsage = true;
 
 	hw->max_rates = 8;
 	hw->max_rate_tries = 15;
@@ -349,28 +342,33 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	INIT_WORK(&priv->offchannel_work, cw1200_offchannel_work);
 	INIT_WORK(&priv->wep_key_work, cw1200_wep_key_work);
 	INIT_WORK(&priv->tx_policy_upload_work, tx_policy_upload_work);
+	spin_lock_init(&priv->event_queue_lock);
 	INIT_LIST_HEAD(&priv->event_queue);
 	INIT_WORK(&priv->event_handler, cw1200_event_handler);
 	INIT_DELAYED_WORK(&priv->bss_loss_work, cw1200_bss_loss_work);
 	INIT_DELAYED_WORK(&priv->connection_loss_work,
 			  cw1200_connection_loss_work);
+	spin_lock_init(&priv->bss_loss_lock);
 	INIT_WORK(&priv->tx_failure_work, cw1200_tx_failure_work);
 	spin_lock_init(&priv->ps_state_lock);
+	INIT_DELAYED_WORK(&priv->set_cts_work, cw1200_set_cts_work);
 	INIT_WORK(&priv->set_tim_work, cw1200_set_tim_work);
 	INIT_WORK(&priv->multicast_start_work, cw1200_multicast_start_work);
 	INIT_WORK(&priv->multicast_stop_work, cw1200_multicast_stop_work);
 	INIT_WORK(&priv->link_id_work, cw1200_link_id_work);
 	INIT_DELAYED_WORK(&priv->link_id_gc_work, cw1200_link_id_gc_work);
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+	INIT_WORK(&priv->linkid_reset_work, cw1200_link_id_reset);
+#endif
+	INIT_WORK(&priv->update_filtering_work, cw1200_update_filtering_work);
+	INIT_WORK(&priv->ba_work, cw1200_ba_work);
 	init_timer(&priv->mcast_timeout);
 	priv->mcast_timeout.data = (unsigned long)priv;
 	priv->mcast_timeout.function = cw1200_mcast_timeout;
-
-#ifdef CONFIG_CW1200_PM
-	if (unlikely(cw1200_pm_init(&priv->pm_state, priv))) {
-		ieee80211_free_hw(hw);
-		return NULL;
-	}
-#endif
+	spin_lock_init(&priv->ba_lock);
+	init_timer(&priv->ba_timer);
+	priv->ba_timer.data = (unsigned long)priv;
+	priv->ba_timer.function = cw1200_ba_timer;
 
 	if (unlikely(cw1200_queue_stats_init(&priv->tx_queue_stats,
 			CW1200_LINK_ID_MAX,
@@ -396,7 +394,11 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	init_waitqueue_head(&priv->wsm_cmd_wq);
 	init_waitqueue_head(&priv->wsm_startup_done);
 	wsm_buf_init(&priv->wsm_cmd_buf);
+	spin_lock_init(&priv->wsm_cmd.lock);
 	tx_policy_init(priv);
+#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
+	priv->wsm_dump_max_size = 20;
+#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
 
 	return hw;
 }
@@ -410,17 +412,29 @@ int cw1200_register_common(struct ieee80211_hw *dev)
 #ifdef CONFIG_CW1200_ETF
 	if (!etf_mode) {
 #endif
+
+#ifdef CONFIG_CW1200_PM
+		err = cw1200_pm_init(&priv->pm_state, priv);
+		if (err) {
+			cw1200_dbg(CW1200_DBG_ERROR, "Cannot init PM. (%d).\n",
+				   err);
+			return err;
+		}
+#endif
 		err = ieee80211_register_hw(dev);
 		if (err) {
 			cw1200_dbg(CW1200_DBG_ERROR, "Cannot register device (%d).\n",
 				   err);
+			cw1200_pm_deinit(&priv->pm_state);
 			return err;
 		}
 
 #ifdef CONFIG_CW1200_LEDS
 		err = cw1200_init_leds(priv);
-		if (err)
+		if (err) {
+			cw1200_pm_deinit(&priv->pm_state);
 			return err;
+		}
 #endif /* CONFIG_CW1200_LEDS */
 
 #ifdef CONFIG_CW1200_ETF
@@ -457,10 +471,13 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 	}
 #endif
 
-	cw1200_debug_release(priv);
+	del_timer_sync(&priv->mcast_timeout);
+	del_timer_sync(&priv->ba_timer);
 
 	priv->sbus_ops->irq_unsubscribe(priv->sbus_priv);
 	cw1200_unregister_bh(priv);
+
+	cw1200_debug_release(priv);
 
 #ifdef CONFIG_CW1200_LEDS
 	cw1200_unregister_leds(priv);
@@ -470,9 +487,6 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 
 	wsm_buf_deinit(&priv->wsm_cmd_buf);
 
-	kfree(priv->scan.ie);
-	priv->scan.ie = NULL;
-	priv->scan.ie_len = 0;
 	destroy_workqueue(priv->workqueue);
 	priv->workqueue = NULL;
 
@@ -506,6 +520,10 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	int err = -ENOMEM;
 	struct ieee80211_hw *dev;
 	struct cw1200_common *priv;
+	struct wsm_operational_mode mode = {
+		.power_mode = cw1200_power_mode,
+		.disableMoreFlagUsage = true,
+	};
 
 	dev = cw1200_init_common(sizeof(struct cw1200_common), macaddr);
 	if (!dev)
@@ -548,7 +566,7 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	}
 
 	/* Set low-power mode. */
-	WARN_ON(wsm_set_operational_mode(priv, &priv->power_mode));
+	WARN_ON(wsm_set_operational_mode(priv, &mode));
 
 	/* Enable multi-TX confirmation */
 	WARN_ON(wsm_use_multi_tx_conf(priv, true));

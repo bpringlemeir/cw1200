@@ -10,6 +10,7 @@
  * published by the Free Software Foundation.
  */
 
+#include <linux/module.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include "cw1200.h"
@@ -104,6 +105,17 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	struct list_head *item;
 	struct cw1200_common *priv = seq->private;
 	struct cw1200_debug_priv *d = priv->debug;
+	int ba_cnt, ba_acc, ba_avg = 0;
+	bool ba_ena;
+
+	spin_lock_bh(&priv->ba_lock);
+	ba_cnt = priv->debug->ba_cnt;
+	ba_acc = priv->debug->ba_acc;
+	ba_ena = priv->ba_ena;
+	if (ba_cnt)
+		ba_avg = ba_acc / ba_cnt;
+	spin_unlock_bh(&priv->ba_lock);
+
 	seq_puts(seq,   "CW1200 Wireless LAN driver status\n");
 	seq_printf(seq, "Hardware:   %d.%d\n",
 		priv->wsm_caps.hardwareId,
@@ -215,6 +227,9 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 		++i;
 	spin_unlock_bh(&priv->tx_policy_cache.lock);
 	seq_printf(seq, "RC in use:  %d\n", i);
+	seq_printf(seq, "BA stat:    %d, %d (%d)\n",
+		ba_cnt, ba_acc, ba_avg);
+	seq_printf(seq, "Block ACK:  %s\n", ba_ena ? "on" : "off");
 
 	seq_puts(seq, "\n");
 	for (i = 0; i < 4; ++i) {
@@ -290,6 +305,10 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 		d->tx_cache_miss);
 	seq_printf(seq, "TX align:   %d\n",
 		d->tx_align);
+	seq_printf(seq, "TX burst:   %d\n",
+		d->tx_burst);
+	seq_printf(seq, "RX burst:   %d\n",
+		d->rx_burst);
 	seq_printf(seq, "TX TTL:     %d\n",
 		d->tx_ttl);
 	seq_printf(seq, "Scan:       %s\n",
@@ -407,9 +426,8 @@ static ssize_t cw1200_11n_write(struct file *file,
 		ena = 1;
 
 	band[0]->ht_cap.ht_supported = ena;
-#ifdef CONFIG_CW1200_5GHZ_SUPPORT
-	band[1]->ht_cap.ht_supported = ena;
-#endif /* CONFIG_CW1200_5GHZ_SUPPORT */
+	if (band[1]) 
+		band[1]->ht_cap.ht_supported = ena;
 
 	return count;
 }
@@ -553,15 +571,114 @@ static const struct file_operations fops_etf_in = {
 };
 #endif /* CONFIG_CW1200_ETF */
 
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+static ssize_t cw1200_hang_write(struct file *file,
+	const char __user *user_buf, size_t count, loff_t *ppos)
+{
+	struct cw1200_common *priv = file->private_data;
+	char buf[1];
+
+	if (!count)
+		return -EINVAL;
+	if (copy_from_user(buf, user_buf, 1))
+		return -EFAULT;
+
+	if (priv->vif) {
+		cw1200_pm_stay_awake(&priv->pm_state, 3*HZ);
+		ieee80211_driver_hang_notify(priv->vif, GFP_KERNEL);
+	} else
+		return -ENODEV;
+
+	return count;
+}
+
+static const struct file_operations fops_hang = {
+	.open = cw1200_generic_open,
+	.write = cw1200_hang_write,
+	.llseek = default_llseek,
+};
+#endif
+
+static ssize_t cw1200_wsm_dumps(struct file *file,
+	const char __user *user_buf, size_t count, loff_t *ppos)
+{
+	struct cw1200_common *priv = file->private_data;
+	char buf[1];
+
+	if (!count)
+		return -EINVAL;
+	if (copy_from_user(buf, user_buf, 1))
+		return -EFAULT;
+
+	if (buf[0] == '1')
+		priv->wsm_enable_wsm_dumps = 1;
+	else
+		priv->wsm_enable_wsm_dumps = 0;
+
+	return count;
+}
+
+static const struct file_operations fops_wsm_dumps = {
+	.open = cw1200_generic_open,
+	.write = cw1200_wsm_dumps,
+	.llseek = default_llseek,
+};
+
+#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
+static ssize_t cw1200_short_dump_read(struct file *file,
+	char __user *user_buf, size_t count, loff_t *ppos)
+{
+	struct cw1200_common *priv = file->private_data;
+	char buf[20];
+	size_t size = 0;
+
+	sprintf(buf, "Size: %u\n", priv->wsm_dump_max_size);
+	size = strlen(buf);
+
+	return simple_read_from_buffer(user_buf, count, ppos,
+					buf, size);
+}
+
+static ssize_t cw1200_short_dump_write(struct file *file,
+	const char __user *user_buf, size_t count, loff_t *ppos)
+{
+	struct cw1200_common *priv = file->private_data;
+	char buf[20];
+	unsigned long dump_size = 0;
+
+	if (!count || count > 20)
+		return -EINVAL;
+	if (copy_from_user(buf, user_buf, count))
+		return -EFAULT;
+
+	if (kstrtoul(buf, 10, &dump_size))
+		return -EINVAL;
+	printk(KERN_ERR "%s get %lu\n", __func__, dump_size);
+
+	priv->wsm_dump_max_size = dump_size;
+
+	return count;
+}
+
+static const struct file_operations fops_short_dump = {
+	.open = cw1200_generic_open,
+	.write = cw1200_short_dump_write,
+	.read = cw1200_short_dump_read,
+	.llseek = default_llseek,
+};
+#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
+
 int cw1200_debug_init(struct cw1200_common *priv)
 {
+	int ret = -ENOMEM;
 	struct cw1200_debug_priv *d = kzalloc(sizeof(struct cw1200_debug_priv),
 			GFP_KERNEL);
 	priv->debug = d;
 	if (!d)
-		return -ENOMEM;
+		return ret;
 
-	d->debugfs_phy = debugfs_create_dir("cw1200", NULL);
+	d->debugfs_phy = debugfs_create_dir("cw1200",
+			priv->hw->wiphy->debugfsdir);
 	if (!d->debugfs_phy)
 		goto err;
 
@@ -590,24 +707,51 @@ int cw1200_debug_init(struct cw1200_common *priv)
 	}
 #endif /* CONFIG_CW1200_ETF */
 
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+	if (!debugfs_create_file("hang", S_IWUSR, d->debugfs_phy,
+			priv, &fops_hang))
+		goto err;
+#endif
+
+	if (!debugfs_create_file("wsm_dumps", S_IWUSR, d->debugfs_phy,
+			priv, &fops_wsm_dumps))
+		goto err;
+
+#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
+	if (!debugfs_create_file("wsm_dump_size", S_IRUSR | S_IWUSR,
+			d->debugfs_phy, priv, &fops_short_dump))
+		goto err;
+#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
+
+	ret = cw1200_itp_init(priv);
+	if (ret)
+		goto err;
+
 	return 0;
 
 err:
 	priv->debug = NULL;
 	debugfs_remove_recursive(d->debugfs_phy);
 	kfree(d);
-	return -ENOMEM;
+	return ret;
 }
 
 void cw1200_debug_release(struct cw1200_common *priv)
 {
 	struct cw1200_debug_priv *d = priv->debug;
-	priv->debug = NULL;
-
 	if (d) {
-		debugfs_remove_recursive(d->debugfs_phy);
+		cw1200_itp_release(priv);
+		priv->debug = NULL;
 		kfree(d);
 	}
+}
+
+int cw1200_print_fw_version(struct cw1200_common *priv, u8 *buf, size_t len)
+{
+	return snprintf(buf, len, "%s %d.%d",
+			cw1200_debug_fw_types[priv->wsm_caps.firmwareType],
+			priv->wsm_caps.firmwareVersion,
+			priv->wsm_caps.firmwareBuildNumber);
 }
 
 #ifdef CONFIG_CW1200_ETF

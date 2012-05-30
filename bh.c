@@ -22,6 +22,7 @@
 #include "hwio.h"
 #include "wsm.h"
 #include "sbus.h"
+#include "debug.h"
 
 #if defined(CONFIG_CW1200_BH_DEBUG)
 #define bh_printk(...) printk(__VA_ARGS__)
@@ -285,7 +286,13 @@ static int cw1200_bh(void *arg)
 	u16 ctrl_reg = 0;
 	int tx_allowed;
 	int pending_tx = 0;
+	int tx_burst;
+	int rx_burst = 0;
 	long status;
+#if defined(CONFIG_CW1200_WSM_DUMPS)
+	size_t wsm_dump_max = -1;
+#endif
+	u32 dummy;
 
 	for (;;) {
 		if (!priv->hw_bufs_used
@@ -298,20 +305,60 @@ static int cw1200_bh(void *arg)
 		else
 			status = MAX_SCHEDULE_TIMEOUT;
 
+		/* Dummy Read for SDIO retry mechanism*/
+		if (((atomic_read(&priv->bh_rx) == 0) &&
+				(atomic_read(&priv->bh_tx) == 0)))
+			cw1200_reg_read(priv, ST90TDS_CONFIG_REG_ID,
+					&dummy, sizeof(dummy));
+#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
+		wsm_dump_max = priv->wsm_dump_max_size;
+#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
+
 		status = wait_event_interruptible_timeout(priv->bh_wq, ({
 				rx = atomic_xchg(&priv->bh_rx, 0);
 				tx = atomic_xchg(&priv->bh_tx, 0);
 				term = atomic_xchg(&priv->bh_term, 0);
-				suspend = atomic_read(&priv->bh_suspend);
-				(rx || tx || term || suspend);
+				suspend = pending_tx ?
+					0 : atomic_read(&priv->bh_suspend);
+				(rx || tx || term || suspend || priv->bh_error);
 			}), status);
 
-		if (status < 0 || term)  /* Error */
+		if (status < 0 || term || priv->bh_error)  /* Error */
 			break;
 
 		if (!status && priv->hw_bufs_used) { /* Timeout, no work */
+			unsigned long timestamp = jiffies;
+			long timeout;
+			bool pending = false;
+			int i;
+
 			wiphy_warn(priv->hw->wiphy, "Missed interrupt?\n");
 			rx = 1;
+
+			/* Get a timestamp of "oldest" frame */
+			for (i = 0; i < 4; ++i)
+				pending |= cw1200_queue_get_xmit_timestamp(
+						&priv->tx_queue[i],
+						&timestamp);
+
+			/* Check if frame transmission is timed out.
+			 * Add an extra second with respect to possible
+			 * interrupt loss. */
+			timeout = timestamp +
+					WSM_CMD_LAST_CHANCE_TIMEOUT +
+					1 * HZ  -
+					jiffies;
+
+			/* And terminate BH tread if the frame is "stuck" */
+			if (pending && timeout < 0) {
+				wiphy_warn(priv->hw->wiphy,
+					"Timeout waiting for TX confirm.\n");
+				break;
+			}
+
+#if defined(CONFIG_CW1200_DUMP_ON_ERROR)
+			BUG_ON(1);
+#endif /* CONFIG_CW1200_DUMP_ON_ERROR */
 #if 0  /* XXX This is clearly bogus; positive non-zero return from w_e_i_t() means we have work! */
 		} else if (!status) {
 			bh_printk(KERN_DEBUG "[BH] Device wakedown.\n");
@@ -360,8 +407,10 @@ static int cw1200_bh(void *arg)
 				break;
 rx:
 			read_len = (ctrl_reg & ST90TDS_CONT_NEXT_LEN_MASK) * 2;
-			if (!read_len)
+			if (!read_len) {
+				rx_burst = 0;
 				goto tx;
+			}
 
 			if (WARN_ON((read_len < sizeof(struct wsm_hdr)) ||
 					(read_len > EFFECTIVE_BUF_SIZE))) {
@@ -376,6 +425,13 @@ rx:
 
 			alloc_len = priv->sbus_ops->align_size(
 					priv->sbus_priv, read_len);
+
+			/* Check if not exceeding CW1200 capabilities */
+			if (WARN_ON_ONCE(alloc_len > EFFECTIVE_BUF_SIZE)) {
+				printk(KERN_DEBUG "Read aligned len: %d\n",
+					alloc_len);
+			}
+
 			skb_rx = cw1200_get_skb(priv, alloc_len);
 			if (WARN_ON(!skb_rx))
 				break;
@@ -401,8 +457,10 @@ rx:
 				break;
 
 #if defined(CONFIG_CW1200_WSM_DUMPS)
-			print_hex_dump_bytes("<-- ", DUMP_PREFIX_NONE,
-				data, wsm_len);
+			if (unlikely(priv->wsm_enable_wsm_dumps))
+				print_hex_dump_bytes("<-- ",
+					DUMP_PREFIX_NONE,
+					data, min(wsm_len, wsm_dump_max));
 #endif /* CONFIG_CW1200_WSM_DUMPS */
 
 			wsm_id  = __le16_to_cpu(wsm->id) & 0xFFF;
@@ -416,8 +474,12 @@ rx:
 					wsm_len - sizeof(*wsm));
 				break;
 			} else if (unlikely(!rx_resync)) {
-				if (WARN_ON(wsm_seq != priv->wsm_rx_seq))
+				if (WARN_ON(wsm_seq != priv->wsm_rx_seq)) {
+#if defined(CONFIG_CW1200_DUMP_ON_ERROR)
+					BUG_ON(1);
+#endif /* CONFIG_CW1200_DUMP_ON_ERROR */
 					break;
+				}
 			}
 			priv->wsm_rx_seq = (wsm_seq + 1) & 7;
 			rx_resync = 0;
@@ -440,13 +502,18 @@ rx:
 			}
 
 			read_len = 0;
+
+			if (rx_burst) {
+				cw1200_debug_rx_burst(priv);
+				--rx_burst;
+				goto rx;
+			}
 		}
 
 tx:
-		/* HACK! One buffer is reserved for control path */
 		BUG_ON(priv->hw_bufs_used > priv->wsm_caps.numInpChBufs);
-		tx_allowed =
-			priv->hw_bufs_used < priv->wsm_caps.numInpChBufs;
+		tx_burst = priv->wsm_caps.numInpChBufs - priv->hw_bufs_used;
+		tx_allowed = tx_burst > 0;
 
 		if (tx && tx_allowed) {
 			size_t tx_len;
@@ -468,7 +535,7 @@ tx:
 			}
 
 			wsm_alloc_tx_buffer(priv);
-			ret = wsm_get_tx(priv, &data, &tx_len);
+			ret = wsm_get_tx(priv, &data, &tx_len, &tx_burst);
 			if (ret <= 0) {
 				wsm_release_tx_buffer(priv, 1);
 				if (WARN_ON(ret < 0))
@@ -488,6 +555,14 @@ tx:
 				tx_len = priv->sbus_ops->align_size(
 						priv->sbus_priv, tx_len);
 
+				/* Check if not exceeding CW1200
+				    capabilities */
+				if (WARN_ON_ONCE(
+				    tx_len > EFFECTIVE_BUF_SIZE)) {
+					printk(KERN_DEBUG "Write aligned len:"
+					" %d\n", tx_len);
+				}
+
 				wsm->id &= __cpu_to_le16(
 						~WSM_TX_SEQ(WSM_TX_SEQ_MAX));
 				wsm->id |= __cpu_to_le16(
@@ -502,22 +577,24 @@ tx:
 				}
 
 #if defined(CONFIG_CW1200_WSM_DUMPS)
-				print_hex_dump_bytes("--> ", DUMP_PREFIX_NONE,
-					data, __le16_to_cpu(wsm->len));
+				if (unlikely(priv->wsm_enable_wsm_dumps))
+					print_hex_dump_bytes("--> ",
+						DUMP_PREFIX_NONE,
+						data, 
+						min(__le16_to_cpu(wsm->len),
+						 wsm_dump_max));
 #endif /* CONFIG_CW1200_WSM_DUMPS */
 
 				wsm_txed(priv, data);
 				priv->wsm_tx_seq = (priv->wsm_tx_seq + 1) &
 						WSM_TX_SEQ_MAX;
-			}
-		}
 
-		/* HACK!!! Device tends not to send interrupt
-		 * if this extra check is missing */
-		if (!(ctrl_reg & ST90TDS_CONT_NEXT_LEN_MASK)) {
-			if (WARN_ON(cw1200_bh_read_ctrl_reg(
-					priv, &ctrl_reg)))
-				break;
+				if (tx_burst > 1) {
+					cw1200_debug_tx_burst(priv);
+					++rx_burst;
+					goto tx;
+				}
+			}
 		}
 
 		if (ctrl_reg & ST90TDS_CONT_NEXT_LEN_MASK)
@@ -540,7 +617,14 @@ tx:
 
 	if (!term) {
 		cw1200_dbg(CW1200_DBG_ERROR, "[BH] Fatal error, exitting.\n");
+#if defined(CONFIG_CW1200_DUMP_ON_ERROR)
+		BUG_ON(1);
+#endif /* CONFIG_CW1200_DUMP_ON_ERROR */
 		priv->bh_error = 1;
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+		ieee80211_driver_hang_notify(priv->vif, GFP_KERNEL);
+		cw1200_pm_stay_awake(&priv->pm_state, 3*HZ);
+#endif
 		/* TODO: schedule_work(recovery) */
 #ifndef HAS_PUT_TASK_STRUCT
 		/* The only reason of having this stupid code here is

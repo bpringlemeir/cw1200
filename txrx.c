@@ -127,6 +127,59 @@ static void tx_policy_build(const struct cw1200_common *priv,
 			limit -= rates[i].count;
 		}
 	}
+
+	/* HACK!!! Device has problems (at least) switching from
+	 * 54Mbps CTS to 1Mbps. This switch takes enormous amount
+	 * of time (100-200 ms), leading to valuable throughput drop.
+	 * As a workaround, additional g-rates are injected to the
+	 * policy.
+	 */
+	if (count == 2 && !(rates[0].flags & IEEE80211_TX_RC_MCS) &&
+			rates[0].idx > 4 && rates[0].count > 2 &&
+			rates[1].idx < 2) {
+		/* ">> 1" is an equivalent of "/ 2", but faster */
+		int mid_rate = (rates[0].idx + 4) >> 1;
+
+		/* Decrease number of retries for the initial rate */
+		rates[0].count -= 2;
+
+		if (mid_rate != 4) {
+			/* Keep fallback rate at 1Mbps. */
+			rates[3] = rates[1];
+
+			/* Inject 1 transmission on lowest g-rate */
+			rates[2].idx = 4;
+			rates[2].count = 1;
+			rates[2].flags = rates[1].flags;
+
+			/* Inject 1 transmission on mid-rate */
+			rates[1].idx = mid_rate;
+			rates[1].count = 1;
+
+			/* Fallback to 1 Mbps is a really bad thing,
+			 * so let's try to increase probability of
+			 * successful transmission on the lowest g rate
+			 * even more */
+			if (rates[0].count >= 3) {
+				--rates[0].count;
+				++rates[2].count;
+			}
+
+			/* Adjust amount of rates defined */
+			count += 2;
+		} else {
+			/* Keep fallback rate at 1Mbps. */
+			rates[2] = rates[1];
+
+			/* Inject 2 transmissions on lowest g-rate */
+			rates[1].idx = 4;
+			rates[1].count = 2;
+
+			/* Adjust amount of rates defined */
+			count += 1;
+		}
+	}
+
 	policy->defined = cw1200_get_tx_rate(priv, &rates[0])->hw_value + 1;
 
 	for (i = 0; i < count; ++i) {
@@ -235,7 +288,10 @@ static int tx_policy_get(struct cw1200_common *priv,
 	tx_policy_build(priv, &wanted, rates, count);
 
 	spin_lock_bh(&cache->lock);
-	BUG_ON(list_empty(&cache->free));
+	if (WARN_ON_ONCE(list_empty(&cache->free))) {
+		spin_unlock_bh(&cache->lock);
+		return CW1200_INVALID_RATE_ID;
+	}
 	idx = tx_policy_find(cache, &wanted);
 	if (idx >= 0) {
 		tx_policy_printk(KERN_DEBUG "[TX policy] Used TX policy: %d\n",
@@ -662,13 +718,23 @@ cw1200_tx_h_bt(struct cw1200_common *priv,
 	wsm->flags |= priority << 1;
 }
 
-static void
+static int
 cw1200_tx_h_rate_policy(struct cw1200_common *priv,
 			struct cw1200_txinfo *t,
 			struct wsm_tx *wsm)
 {
 	bool tx_policy_renew = false;
 
+	t->txpriv.rate_id = tx_policy_get(priv,
+		t->tx_info->control.rates, IEEE80211_TX_MAX_RATES,
+		&tx_policy_renew);
+	if (t->txpriv.rate_id == CW1200_INVALID_RATE_ID)
+		return -EFAULT;
+
+	wsm->flags |= t->txpriv.rate_id << 4;
+
+	t->rate = cw1200_get_tx_rate(priv,
+		&t->tx_info->control.rates[0]),
 	wsm->maxTxRate = t->rate->hw_value;
 	if (t->rate->flags & IEEE80211_TX_RC_MCS) {
 		if (cw1200_ht_greenfield(&priv->ht_info))
@@ -679,11 +745,6 @@ cw1200_tx_h_rate_policy(struct cw1200_common *priv,
 				__cpu_to_le32(WSM_HT_TX_MIXED);
 	}
 
-	t->txpriv.rate_id = tx_policy_get(priv,
-		t->tx_info->control.rates, IEEE80211_TX_MAX_RATES,
-		&tx_policy_renew);
-	wsm->flags |= t->txpriv.rate_id << 4;
-
 	if (tx_policy_renew) {
 		tx_policy_printk(KERN_DEBUG "[TX] TX policy renew.\n");
 		/* It's not so optimal to stop TX queues every now and then.
@@ -693,13 +754,18 @@ cw1200_tx_h_rate_policy(struct cw1200_common *priv,
 		/* Definetly better. TODO. */
 		wsm_lock_tx_async(priv);
 		cw1200_tx_queues_lock(priv);
-		queue_work(priv->workqueue, &priv->tx_policy_upload_work);
+		if (queue_work(priv->workqueue,
+				&priv->tx_policy_upload_work) <= 0) {
+			cw1200_tx_queues_unlock(priv);
+			wsm_unlock_tx(priv);
+		}
 	}
+	return 0;
 }
 
 static bool
 cw1200_tx_h_pm_state(struct cw1200_common *priv,
-			struct cw1200_txinfo *t)
+		     struct cw1200_txinfo *t)
 {
 	int was_buffered = 1;
 
@@ -718,6 +784,28 @@ cw1200_tx_h_pm_state(struct cw1200_common *priv,
 	return !was_buffered;
 }
 
+static void
+cw1200_tx_h_ba_stat(struct cw1200_common *priv,
+		    struct cw1200_txinfo *t)
+{
+	if (priv->join_status != CW1200_JOIN_STATUS_STA)
+		return;
+	if (!cw1200_is_ht(&priv->ht_info))
+		return;
+	if (!priv->setbssparams_done)
+		return;
+	if (!ieee80211_is_data(t->hdr->frame_control))
+		return;
+
+	spin_lock_bh(&priv->ba_lock);
+	priv->ba_acc += t->skb->len - t->hdrlen;
+	if (!priv->ba_cnt++) {
+		mod_timer(&priv->ba_timer,
+			jiffies + CW1200_BLOCK_ACK_INTERVAL);
+	}
+	spin_unlock_bh(&priv->ba_lock);
+}
+
 /* ******************************************************************** */
 
 void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
@@ -731,19 +819,18 @@ void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 		.txpriv.tid = CW1200_MAX_TID,
 		.txpriv.rate_id = CW1200_INVALID_RATE_ID,
 	};
+	struct ieee80211_sta *sta;
 	struct wsm_tx *wsm;
 	bool tid_update = 0;
 	u8 flags = 0;
 	int ret;
 
-	t.rate = cw1200_get_tx_rate(priv,
-		&t.tx_info->control.rates[0]),
 	t.hdrlen = ieee80211_hdrlen(t.hdr->frame_control);
 	t.da = ieee80211_get_DA(t.hdr);
 	t.sta_priv =
 		(struct cw1200_sta_priv *)&t.tx_info->control.sta->drv_priv;
 
-	if (WARN_ON(t.queue >= 4 || !t.rate))
+	if (WARN_ON(t.queue >= 4))
 		goto drop;
 
 	ret = cw1200_tx_h_calc_link_ids(priv, &t);
@@ -773,8 +860,14 @@ void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	}
 	wsm->flags |= flags;
 	cw1200_tx_h_bt(priv, &t, wsm);
-	cw1200_tx_h_rate_policy(priv, &t, wsm);
+	ret = cw1200_tx_h_rate_policy(priv, &t, wsm);
+	if (ret)
+		goto drop;
 
+	rcu_read_lock();
+	sta = rcu_dereference(t.tx_info->control.sta);
+
+	cw1200_tx_h_ba_stat(priv, &t);
 	spin_lock_bh(&priv->ps_state_lock);
 	{
 		tid_update = cw1200_tx_h_pm_state(priv, &t);
@@ -784,10 +877,12 @@ void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	spin_unlock_bh(&priv->ps_state_lock);
 
 #if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
-	if (tid_update)
-		ieee80211_sta_set_buffered(t.tx_info->control.sta,
+	if (tid_update && sta)
+		ieee80211_sta_set_buffered(sta,
 				t.txpriv.tid, true);
 #endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
+
+	rcu_read_unlock();
 
 	cw1200_bh_wakeup(priv);
 
@@ -872,6 +967,9 @@ void cw1200_tx_confirm_cb(struct cw1200_common *priv,
 	txrx_printk(KERN_DEBUG "[TX] TX confirm: %d, %d.\n",
 		arg->status, arg->ackFailures);
 
+	if (unlikely(cw1200_itp_tx_running(priv)))
+		return;
+
 	if (unlikely(priv->mode == NL80211_IFTYPE_UNSPECIFIED)) {
 		/* STA is stopped. */
 		return;
@@ -900,6 +998,15 @@ void cw1200_tx_confirm_cb(struct cw1200_common *priv,
 			priv->sta_asleep_mask);
 		WARN_ON(cw1200_queue_requeue(queue,
 				arg->packetID));
+		spin_lock_bh(&priv->ps_state_lock);
+		if (!arg->link_id) {
+			priv->buffered_multicasts = true;
+			if (priv->sta_asleep_mask) {
+				queue_work(priv->workqueue,
+					&priv->multicast_start_work);
+			}
+		}
+		spin_unlock_bh(&priv->ps_state_lock);
 	} else if (!WARN_ON(cw1200_queue_get_skb(
 			queue, arg->packetID, &skb, &txpriv))) {
 		struct ieee80211_tx_info *tx = IEEE80211_SKB_CB(skb);
@@ -922,6 +1029,20 @@ void cw1200_tx_confirm_cb(struct cw1200_common *priv,
 				cw1200_debug_txed_agg(priv);
 			}
 		} else {
+			spin_lock(&priv->bss_loss_lock);
+			if (priv->bss_loss_status ==
+					CW1200_BSS_LOSS_CONFIRMING &&
+					priv->bss_loss_confirm_id ==
+					arg->packetID) {
+				priv->bss_loss_status =
+					CW1200_BSS_LOSS_CONFIRMED;
+				spin_unlock(&priv->bss_loss_lock);
+				cancel_delayed_work(&priv->bss_loss_work);
+				queue_delayed_work(priv->workqueue,
+						&priv->bss_loss_work, 0);
+			} else
+				spin_unlock(&priv->bss_loss_lock);
+
 			/* TODO: Update TX failure counters */
 			if (unlikely(priv->cqm_tx_failure_thold &&
 			     (++priv->cqm_tx_failure_count >
@@ -948,6 +1069,7 @@ void cw1200_tx_confirm_cb(struct cw1200_common *priv,
 			tx->status.rates[i].count = 0;
 			tx->status.rates[i].idx = -1;
 		}
+
 
 		cw1200_queue_remove(queue, arg->packetID);
 	}
@@ -993,7 +1115,8 @@ void cw1200_skb_dtor(struct cw1200_common *priv,
 				txpriv->raw_link_id, txpriv->tid);
 		tx_policy_put(priv, txpriv->rate_id);
 	}
-	ieee80211_tx_status(priv->hw, skb);
+	if (likely(!cw1200_is_itp(priv)))
+		ieee80211_tx_status(priv->hw, skb);
 }
 
 void cw1200_rx_cb(struct cw1200_common *priv,
@@ -1003,6 +1126,9 @@ void cw1200_rx_cb(struct cw1200_common *priv,
 	struct sk_buff *skb = *skb_p;
 	struct ieee80211_rx_status *hdr = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_hdr *frame = (struct ieee80211_hdr *)skb->data;
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)skb->data;
+#endif
 	struct cw1200_link_entry *entry = NULL;
 	unsigned long grace_period;
 	bool early_data = false;
@@ -1020,7 +1146,34 @@ void cw1200_rx_cb(struct cw1200_common *priv,
 			early_data = true;
 		entry->timestamp = jiffies;
 	}
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+	else if ((priv->vif->p2p == WSM_START_MODE_P2P_GO)
+			&& ieee80211_is_action(frame->frame_control)
+			&& (mgmt->u.action.category == WLAN_CATEGORY_PUBLIC)) {
+		txrx_printk(KERN_DEBUG "[RX] Going to MAP&RESET link ID\n");
 
+		if (work_pending(&priv->linkid_reset_work))
+			WARN_ON(1);
+
+		memcpy(&priv->action_frame_sa[0],
+				ieee80211_get_SA(frame), ETH_ALEN);
+		priv->action_linkid = 0;
+		schedule_work(&priv->linkid_reset_work);
+	}
+
+	if (arg->link_id && (priv->vif->p2p == WSM_START_MODE_P2P_GO)
+			&& ieee80211_is_action(frame->frame_control)
+			&& (mgmt->u.action.category == WLAN_CATEGORY_PUBLIC)) {
+		/* Link ID already exists for the ACTION frame.
+		 * Reset and Remap */
+		if (work_pending(&priv->linkid_reset_work))
+			WARN_ON(1);
+		memcpy(&priv->action_frame_sa[0],
+				ieee80211_get_SA(frame), ETH_ALEN);
+		priv->action_linkid = arg->link_id;
+		schedule_work(&priv->linkid_reset_work);
+	}
+#endif
 	if (unlikely(arg->status)) {
 		if (arg->status == WSM_STATUS_MICFAILURE) {
 			txrx_printk(KERN_DEBUG "[RX] MIC failure.\n");
@@ -1096,6 +1249,10 @@ void cw1200_rx_cb(struct cw1200_common *priv,
 			goto drop;
 		}
 
+		/* Firmware strips ICV in case of MIC failure. */
+		if (arg->status == WSM_STATUS_MICFAILURE)
+			icv_len = 0;
+
 		if (skb->len < hdrlen + iv_len + icv_len) {
 			wiphy_warn(priv->hw->wiphy, "Mailformed SDU rx'ed. "
 				"Size is lesser than crypto headers.\n");
@@ -1113,21 +1270,33 @@ void cw1200_rx_cb(struct cw1200_common *priv,
 		cw1200_debug_rxed_agg(priv);
 
 	if (ieee80211_is_action(frame->frame_control) &&
-			(arg->flags & WSM_RX_STATUS_ADDRESS1))
+			(arg->flags & WSM_RX_STATUS_ADDRESS1)) {
 		if (cw1200_handle_action_rx(priv, skb))
 			return;
+	} else if (unlikely(priv->disable_beacon_filter) &&
+			!arg->status &&
+			ieee80211_is_beacon(frame->frame_control) &&
+			!memcmp(ieee80211_get_SA(frame), priv->join_bssid,
+				ETH_ALEN)) {
+		priv->disable_beacon_filter = false;
+		queue_work(priv->workqueue, &priv->update_filtering_work);
+	}
 
 	/* Stay awake for 1sec. after frame is received to give
 	 * userspace chance to react and acquire appropriate
 	 * wakelock. */
 	if (ieee80211_is_auth(frame->frame_control))
 		grace_period = 5 * HZ;
+	else if (ieee80211_is_deauth(frame->frame_control))
+		grace_period = 5 * HZ;
 	else
 		grace_period = 1 * HZ;
 #ifdef CONFIG_CW1200_PM
 	cw1200_pm_stay_awake(&priv->pm_state, grace_period);
 #endif
-	if (unlikely(early_data)) {
+	if (unlikely(cw1200_itp_rxed(priv, skb)))
+		consume_skb(skb);
+	else if (unlikely(early_data)) {
 		spin_lock_bh(&priv->ps_state_lock);
 		/* Double-check status with lock held */
 		if (entry->status == CW1200_LINK_SOFT)
@@ -1187,3 +1356,45 @@ int cw1200_upload_keys(struct cw1200_common *priv)
 		}
 	return ret;
 }
+#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
+/* Workaround for WFD test case 6.1.10 */
+void cw1200_link_id_reset(struct work_struct *work)
+{
+	struct cw1200_common *priv =
+		container_of(work, struct cw1200_common, linkid_reset_work);
+	int temp_linkid;
+
+	if (!priv->action_linkid) {
+		/* In GO mode we can receive ACTION frames without a linkID */
+		temp_linkid = cw1200_alloc_link_id(priv,
+				&priv->action_frame_sa[0]);
+		WARN_ON(!temp_linkid);
+		if (temp_linkid) {
+			/* Make sure we execute the WQ */
+			flush_workqueue(priv->workqueue);
+			/* Release the link ID */
+			spin_lock_bh(&priv->ps_state_lock);
+			priv->link_id_db[temp_linkid - 1].prev_status =
+				priv->link_id_db[temp_linkid - 1].status;
+			priv->link_id_db[temp_linkid - 1].status =
+				CW1200_LINK_RESET;
+			spin_unlock_bh(&priv->ps_state_lock);
+			wsm_lock_tx_async(priv);
+			if (queue_work(priv->workqueue,
+					&priv->link_id_work) <= 0)
+				wsm_unlock_tx(priv);
+		}
+	} else {
+		spin_lock_bh(&priv->ps_state_lock);
+		priv->link_id_db[priv->action_linkid - 1].prev_status =
+			priv->link_id_db[priv->action_linkid - 1].status;
+		priv->link_id_db[priv->action_linkid - 1].status =
+			CW1200_LINK_RESET_REMAP;
+		spin_unlock_bh(&priv->ps_state_lock);
+		wsm_lock_tx_async(priv);
+		if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
+			wsm_unlock_tx(priv);
+		flush_workqueue(priv->workqueue);
+	}
+}
+#endif

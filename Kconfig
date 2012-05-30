@@ -63,6 +63,20 @@ config CW1200_PM
       bool "Enable CW1200 advanced Power management"
       depends on CW1200 && PM
 
+config CW1200_USE_STE_EXTENSIONS
+      bool "STE extensions"
+      depends on CW1200
+      help
+        Say Y if you want to include STE extensions.
+        If unsure, say N.
+
+config CW1200_DISABLE_BEACON_HINTS
+      bool "Disable 11d beacon hints"
+      depends on CW1200
+      help
+        Say Y if you want to disable 11d beacon hints.
+        If unsure, say N.
+
 menu "Driver debug features"
       depends on CW1200
 
@@ -78,6 +92,9 @@ config CW1200_WSM_DEBUG
 config CW1200_WSM_DUMPS
       bool "Verbose WSM API logging (DEVELOPMENT)"
 
+config CW1200_WSM_DUMPS_SHORT
+      bool "Dump only first x bytes (default 20) (DEVELOPMENT)"
+
 config CW1200_TXRX_DEBUG
       bool "Enable TX/RX debug messages (DEVELOPMENT)"
 
@@ -90,6 +107,16 @@ config CW1200_STA_DEBUG
 config CW1200_ETF
        bool "Enable CW1200 Engineering Test Framework hooks"
 
+config CW1200_DUMP_ON_ERROR
+      bool "Dump kernel in case of critical error (DEVELOPMENT)"
+
 endmenu
+
+config CW1200_ITP
+      bool "Enable ITP DebugFS"
+      depends on CW1200
+      help
+        Say Y if you want to include ITP code.
+        If unsure, say N.
 
 endif

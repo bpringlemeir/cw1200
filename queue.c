@@ -20,7 +20,8 @@
 	struct list_head	head;
 	struct sk_buff		*skb;
 	u32			packetID;
-	unsigned long		timestamp;
+	unsigned long		queue_timestamp;
+	unsigned long		xmit_timestamp;
 	struct cw1200_txpriv	txpriv;
 	u8			generation;
 };
@@ -85,10 +86,10 @@ static void cw1200_queue_register_post_gc(struct list_head *gc_list,
 {
 	struct cw1200_queue_item *gc_item;
 	gc_item = kmalloc(sizeof(struct cw1200_queue_item),
-			GFP_KERNEL | GFP_ATOMIC);
+			GFP_ATOMIC);
 	BUG_ON(!gc_item);
 	memcpy(gc_item, item, sizeof(struct cw1200_queue_item));
-	list_move_tail(&gc_item->head, gc_list);
+	list_add_tail(&gc_item->head, gc_list);
 }
 
 static void __cw1200_queue_gc(struct cw1200_queue *queue,
@@ -102,7 +103,7 @@ static void __cw1200_queue_gc(struct cw1200_queue *queue,
 	while (!list_empty(&queue->queue)) {
 		item = list_first_entry(
 			&queue->queue, struct cw1200_queue_item, head);
-		if (jiffies - item->timestamp < queue->ttl)
+		if (jiffies - item->queue_timestamp < queue->ttl)
 			break;
 		--queue->num_queued;
 		--queue->link_map_cache[item->txpriv.link_id];
@@ -126,7 +127,7 @@ static void __cw1200_queue_gc(struct cw1200_queue *queue,
 			if (unlock)
 				__cw1200_queue_unlock(queue);
 		} else {
-			unsigned long tmo = item->timestamp + queue->ttl;
+			unsigned long tmo = item->queue_timestamp + queue->ttl;
 			mod_timer(&queue->gc, tmo);
 #ifdef CONFIG_CW1200_PM
 			cw1200_pm_stay_awake(&stats->priv->pm_state,
@@ -311,7 +312,7 @@ int cw1200_queue_put(struct cw1200_queue *queue,
 		item->packetID = cw1200_queue_make_packet_id(
 			queue->generation, queue->queue_id,
 			item->generation, item - queue->pool);
-		item->timestamp = jiffies;
+		item->queue_timestamp = jiffies;
 
 		++queue->num_queued;
 		++queue->link_map_cache[txpriv->link_id];
@@ -321,19 +322,21 @@ int cw1200_queue_put(struct cw1200_queue *queue,
 		++stats->link_map_cache[txpriv->link_id];
 		spin_unlock_bh(&stats->lock);
 
-		if (queue->num_queued >= queue->capacity) {
+		/*
+		 * TX may happen in parallel sometimes.
+		 * Leave extra queue slots so we don't overflow.
+		 */
+		if (queue->overfull == false &&
+				queue->num_queued >=
+				(queue->capacity - (num_present_cpus() - 1))) {
 			queue->overfull = true;
-			__cw1200_queue_gc(queue, &gc_list, false);
-			if (queue->overfull)
-				__cw1200_queue_lock(queue);
-
+			__cw1200_queue_lock(queue);
+			mod_timer(&queue->gc, jiffies);
 		}
 	} else {
 		ret = -ENOENT;
 	}
 	spin_unlock_bh(&queue->lock);
-	if (unlikely(!list_empty(&gc_list)))
-		cw1200_queue_post_gc(stats, &gc_list);
 	return ret;
 }
 
@@ -364,6 +367,7 @@ int cw1200_queue_get(struct cw1200_queue *queue,
 		list_move_tail(&item->head, &queue->pending);
 		++queue->num_pending;
 		--queue->link_map_cache[item->txpriv.link_id];
+		item->xmit_timestamp = jiffies;
 
 		spin_lock_bh(&stats->lock);
 		--stats->num_queued;
@@ -537,6 +541,24 @@ void cw1200_queue_unlock(struct cw1200_queue *queue)
 	spin_lock_bh(&queue->lock);
 	__cw1200_queue_unlock(queue);
 	spin_unlock_bh(&queue->lock);
+}
+
+bool cw1200_queue_get_xmit_timestamp(struct cw1200_queue *queue,
+				     unsigned long *timestamp)
+{
+	struct cw1200_queue_item *item;
+	bool ret;
+
+	spin_lock_bh(&queue->lock);
+	ret = !list_empty(&queue->pending);
+	if (ret) {
+		list_for_each_entry(item, &queue->pending, head) {
+			if (time_before(item->xmit_timestamp, *timestamp))
+				*timestamp = item->xmit_timestamp;
+		}
+	}
+	spin_unlock_bh(&queue->lock);
+	return ret;
 }
 
 bool cw1200_queue_stats_is_empty(struct cw1200_queue_stats *stats,
