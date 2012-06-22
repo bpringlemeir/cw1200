@@ -1277,7 +1277,7 @@ static inline int wsm_set_beacon_wakeup_period(struct cw1200_common *priv,
 	} val = {
 		dtim_interval, 0, __cpu_to_le16(listen_interval)
 	};
-	printk(KERN_INFO "DTIM %d listen %d\n", dtim_interval, listen_interval);
+
 	if (dtim_interval > 0xFF || listen_interval > 0xFFFF)
 		return -EINVAL;
 	else

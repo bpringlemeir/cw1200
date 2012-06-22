@@ -13,7 +13,7 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/compat.h>
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/gpio.h>
 #include <linux/delay.h>
@@ -382,7 +382,7 @@ static int cw1200_spi_pm(struct sbus_priv *self, bool suspend)
 
 #ifdef USE_IRQ_WAKE
 	if (irq)
-		ret = irq_set_irq_wake(irq->start, suspend);
+		ret = set_irq_wake(irq->start, suspend);
 #endif
 
 	return ret;

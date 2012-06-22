@@ -16,6 +16,7 @@
 
 #include <net/mac80211.h>
 #include <linux/kthread.h>
+#include <linux/timer.h>
 
 #include "cw1200.h"
 #include "bh.h"
@@ -51,6 +52,20 @@ enum cw1200_bh_pm_state {
 typedef int (*cw1200_wsm_handler)(struct cw1200_common *priv,
 	u8 *data, size_t size);
 
+#ifdef CONFIG_CW1200_POLL_IRQ
+static void cw1200_irqpoll_timer_fn(unsigned long arg)
+{
+	struct cw1200_common *priv = (struct cw1200_common *) arg;	
+
+#if 1
+	if (atomic_add_return(1, &priv->bh_rx) == 1)
+#else
+	atomic_add(1, &priv->bh_rx);
+#endif
+	wake_up(&priv->bh_wq);
+	mod_timer(&priv->irqpoll_timer, jiffies + HZ/100);
+}
+#endif
 
 int cw1200_register_bh(struct cw1200_common *priv)
 {
@@ -78,6 +93,13 @@ int cw1200_register_bh(struct cw1200_common *priv)
 #endif
 		wake_up_process(priv->bh_thread);
 	}
+
+#ifdef CONFIG_CW1200_POLL_IRQ
+	init_timer(&priv->irqpoll_timer);
+	priv->irqpoll_timer.data = (unsigned long) priv;
+	priv->irqpoll_timer.function = cw1200_irqpoll_timer_fn;
+	mod_timer(&priv->irqpoll_timer, jiffies + HZ/100);
+#endif
 	return err;
 }
 
@@ -86,6 +108,10 @@ void cw1200_unregister_bh(struct cw1200_common *priv)
 	struct task_struct *thread = priv->bh_thread;
 	if (WARN_ON(!thread))
 		return;
+
+#ifdef CONFIG_CW1200_POLL_IRQ
+	del_timer_sync(&priv->irqpoll_timer);
+#endif
 
 	priv->bh_thread = NULL;
 	bh_printk(KERN_DEBUG "[BH] unregister.\n");
@@ -103,6 +129,10 @@ void cw1200_irq_handler(struct cw1200_common *priv)
 	if (/* WARN_ON */(priv->bh_error))
 		return;
 
+#ifdef CONFIG_CW1200_POLL_IRQ
+	mod_timer(&priv->irqpoll_timer, jiffies + HZ/100);
+#endif
+
 	if (priv->sbus_ops->irq_enable)
 		priv->sbus_ops->irq_enable(priv->sbus_priv, 0);
 
@@ -119,7 +149,6 @@ void cw1200_bh_wakeup(struct cw1200_common *priv)
 	bh_printk(KERN_DEBUG "[BH] wakeup.\n");
 	if (WARN_ON(priv->bh_error))
 		return;
-
 #if 1
 	if (atomic_add_return(1, &priv->bh_tx) == 1)
 #else
@@ -323,21 +352,28 @@ static int cw1200_bh(void *arg)
 				(rx || tx || term || suspend || priv->bh_error);
 			}), status);
 
-		if (status < 0 || term || priv->bh_error)  /* Error */
-			break;
+		if (status < 0 || term || priv->bh_error) { /* Error */
+			if (status < 0 
+			    && status != -ERESTARTSYS) {
+				printk(KERN_ERR "w_e_i_t() returned error (%ld)", status);
+				break;
+			}
+		}
 
-		if (!status && priv->hw_bufs_used) { /* Timeout, no work */
+		if (priv->hw_bufs_used) { /* Timeout, no work */
 			unsigned long timestamp = jiffies;
 			long timeout;
-			bool pending = false;
+			int pending = 0;
 			int i;
 
-			wiphy_warn(priv->hw->wiphy, "Missed interrupt?\n");
-			rx = 1;
+			if (!status) {
+			  wiphy_warn(priv->hw->wiphy, "Missed interrupt? (%d outstanding)\n", priv->hw_bufs_used);
+			  rx = 1;
+			}
 
 			/* Get a timestamp of "oldest" frame */
 			for (i = 0; i < 4; ++i)
-				pending |= cw1200_queue_get_xmit_timestamp(
+				pending += cw1200_queue_get_xmit_timestamp(
 						&priv->tx_queue[i],
 						&timestamp);
 
@@ -352,14 +388,13 @@ static int cw1200_bh(void *arg)
 			/* And terminate BH tread if the frame is "stuck" */
 			if (pending && timeout < 0) {
 				wiphy_warn(priv->hw->wiphy,
-					"Timeout waiting for TX confirm.\n");
+					   "Timeout waiting for TX confirm (%d/%d pending, %ld vs %lu).\n", priv->hw_bufs_used, pending, timestamp, jiffies);
 				break;
 			}
 
 #if defined(CONFIG_CW1200_DUMP_ON_ERROR)
 			BUG_ON(1);
 #endif /* CONFIG_CW1200_DUMP_ON_ERROR */
-#if 0  /* XXX This is clearly bogus; positive non-zero return from w_e_i_t() means we have work! */
 		} else if (!status) {
 			bh_printk(KERN_DEBUG "[BH] Device wakedown.\n");
 			WARN_ON(cw1200_reg_write_16(priv,
@@ -367,7 +402,6 @@ static int cw1200_bh(void *arg)
 			priv->device_can_sleep = true;
 			// continue;
 			goto done;
-#endif
 		} else if (suspend) {
 			bh_printk(KERN_DEBUG "[BH] Device suspend.\n");
 			if (priv->powersave_enabled) {
@@ -443,7 +477,7 @@ rx:
 				break;
 
 			if (WARN_ON(cw1200_data_read(priv, data, alloc_len))) {
-			  printk(KERN_ERR "rx blew up, len %d\n", alloc_len);
+				printk(KERN_ERR "rx blew up, len %d\n", alloc_len);
 				break;
 			}
 
@@ -514,11 +548,18 @@ tx:
 		BUG_ON(priv->hw_bufs_used > priv->wsm_caps.numInpChBufs);
 		tx_burst = priv->wsm_caps.numInpChBufs - priv->hw_bufs_used;
 		tx_allowed = tx_burst > 0;
+//		tx_allowed = (tx_burst == priv->wsm_caps.numInpChBufs);
 
-		if (tx && tx_allowed) {
+		if (tx) {
 			size_t tx_len;
 			u8 *data;
 			int ret;
+
+			if (!tx_allowed) {
+				/* Ensure we go again */
+				pending_tx = tx;
+				goto done_rx;
+			}
 
 			if (priv->device_can_sleep) {
 				ret = cw1200_device_wakeup(priv);
@@ -527,7 +568,7 @@ tx:
 				else if (ret)
 					priv->device_can_sleep = false;
 				else {
-					/* Wait for "awake" interrupt */
+					/* Ensure we go again */
 					pending_tx = tx;
 					goto done;
 					//continue;
@@ -553,25 +594,24 @@ tx:
 #endif
 
 				tx_len = priv->sbus_ops->align_size(
-						priv->sbus_priv, tx_len);
+					priv->sbus_priv, tx_len);
 
 				/* Check if not exceeding CW1200
-				    capabilities */
+				   capabilities */
 				if (WARN_ON_ONCE(
-				    tx_len > EFFECTIVE_BUF_SIZE)) {
+					    tx_len > EFFECTIVE_BUF_SIZE)) {
 					printk(KERN_DEBUG "Write aligned len:"
-					" %d\n", tx_len);
+					       " %d\n", tx_len);
 				}
 
 				wsm->id &= __cpu_to_le16(
-						~WSM_TX_SEQ(WSM_TX_SEQ_MAX));
+					~WSM_TX_SEQ(WSM_TX_SEQ_MAX));
 				wsm->id |= __cpu_to_le16(
-						WSM_TX_SEQ(priv->wsm_tx_seq));
+					WSM_TX_SEQ(priv->wsm_tx_seq));
 
 				if (WARN_ON(cw1200_data_write(priv,
-				    data, tx_len))) {
-				  printk(KERN_ERR "tx blew up, len %d\n", tx_len);
-
+							      data, tx_len))) {
+					printk(KERN_ERR "tx blew up, len %d\n", tx_len);
 					wsm_release_tx_buffer(priv, 1);
 					break;
 				}
@@ -579,15 +619,14 @@ tx:
 #if defined(CONFIG_CW1200_WSM_DUMPS)
 				if (unlikely(priv->wsm_enable_wsm_dumps))
 					print_hex_dump_bytes("--> ",
-						DUMP_PREFIX_NONE,
-						data, 
-						min(__le16_to_cpu(wsm->len),
-						 wsm_dump_max));
+							     DUMP_PREFIX_NONE,
+							     data, 
+							     min(__le16_to_cpu(wsm->len),
+								 wsm_dump_max));
 #endif /* CONFIG_CW1200_WSM_DUMPS */
 
 				wsm_txed(priv, data);
-				priv->wsm_tx_seq = (priv->wsm_tx_seq + 1) &
-						WSM_TX_SEQ_MAX;
+				priv->wsm_tx_seq = (priv->wsm_tx_seq + 1) & WSM_TX_SEQ_MAX;
 
 				if (tx_burst > 1) {
 					cw1200_debug_tx_burst(priv);
@@ -597,6 +636,7 @@ tx:
 			}
 		}
 
+	done_rx:
 		if (ctrl_reg & ST90TDS_CONT_NEXT_LEN_MASK)
 			goto rx;
 
@@ -616,7 +656,7 @@ tx:
 		priv->sbus_ops->irq_enable(priv->sbus_priv, 1);
 
 	if (!term) {
-		cw1200_dbg(CW1200_DBG_ERROR, "[BH] Fatal error, exitting.\n");
+		printk(KERN_ERR "[BH] Fatal error, exiting.\n");
 #if defined(CONFIG_CW1200_DUMP_ON_ERROR)
 		BUG_ON(1);
 #endif /* CONFIG_CW1200_DUMP_ON_ERROR */

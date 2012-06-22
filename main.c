@@ -238,7 +238,7 @@ static const struct ieee80211_ops cw1200_ops = {
 	/*.cancel_remain_on_channel = cw1200_cancel_remain_on_channel,	*/
 };
 
-struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
+static struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 {
 	int i;
 	struct ieee80211_hw *hw;
@@ -254,7 +254,9 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	priv->rates = cw1200_rates; /* TODO: fetch from FW */
 	priv->mcs_rates = cw1200_n_rates;
 	/* Enable block ACK for every TID but voice. */
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	priv->ba_tid_mask = 0x3F;
+#endif
 
 	hw->flags = IEEE80211_HW_SIGNAL_DBM |
 		    IEEE80211_HW_SUPPORTS_PS |
@@ -262,8 +264,6 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 		    IEEE80211_HW_REPORTS_TX_ACK_STATUS |
 		    IEEE80211_HW_SUPPORTS_UAPSD |
 		    IEEE80211_HW_CONNECTION_MONITOR |
-		    IEEE80211_HW_SUPPORTS_CQM_RSSI |
-		    IEEE80211_HW_NEED_DTIM_PERIOD |
 		    /* Aggregation is fully controlled by firmware.
 		     * Do not need any support from the mac80211 stack */
 		    /* IEEE80211_HW_AMPDU_AGGREGATION | */
@@ -272,7 +272,7 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 		    IEEE80211_HW_SUPPORTS_CQM_BEACON_MISS |
 		    IEEE80211_HW_SUPPORTS_CQM_TX_FAIL |
 #endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
-		    IEEE80211_HW_BEACON_FILTER;
+		    IEEE80211_HW_NEED_DTIM_PERIOD;
 
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
 					  BIT(NL80211_IFTYPE_ADHOC) |
@@ -361,14 +361,16 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	INIT_WORK(&priv->linkid_reset_work, cw1200_link_id_reset);
 #endif
 	INIT_WORK(&priv->update_filtering_work, cw1200_update_filtering_work);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	INIT_WORK(&priv->ba_work, cw1200_ba_work);
-	init_timer(&priv->mcast_timeout);
-	priv->mcast_timeout.data = (unsigned long)priv;
-	priv->mcast_timeout.function = cw1200_mcast_timeout;
 	spin_lock_init(&priv->ba_lock);
 	init_timer(&priv->ba_timer);
 	priv->ba_timer.data = (unsigned long)priv;
 	priv->ba_timer.function = cw1200_ba_timer;
+#endif
+	init_timer(&priv->mcast_timeout);
+	priv->mcast_timeout.data = (unsigned long)priv;
+	priv->mcast_timeout.function = cw1200_mcast_timeout;
 
 	if (unlikely(cw1200_queue_stats_init(&priv->tx_queue_stats,
 			CW1200_LINK_ID_MAX,
@@ -395,6 +397,7 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 	init_waitqueue_head(&priv->wsm_startup_done);
 	wsm_buf_init(&priv->wsm_cmd_buf);
 	spin_lock_init(&priv->wsm_cmd.lock);
+	priv->wsm_cmd.done = 1;
 	tx_policy_init(priv);
 #if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
 	priv->wsm_dump_max_size = 20;
@@ -402,7 +405,6 @@ struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr)
 
 	return hw;
 }
-EXPORT_SYMBOL_GPL(cw1200_init_common);
 
 int cw1200_register_common(struct ieee80211_hw *dev)
 {
@@ -472,8 +474,9 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 #endif
 
 	del_timer_sync(&priv->mcast_timeout);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	del_timer_sync(&priv->ba_timer);
-
+#endif
 	priv->sbus_ops->irq_unsubscribe(priv->sbus_priv);
 	cw1200_unregister_bh(priv);
 
@@ -524,6 +527,42 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 		.power_mode = cw1200_power_mode,
 		.disableMoreFlagUsage = true,
 	};
+
+	printk(KERN_INFO "CW1200 driver options: "
+#ifdef CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES
+	       "NPTB "
+#endif
+#ifdef CONFIG_CW1200_SDIO_CMD53_WORKAROUND
+	       "CMD53 "
+#endif
+#ifdef CONFIG_CW1200_USE_GPIO_IRQ
+	       "GPIO "
+#endif
+#ifdef CONFIG_CW1200_5GHZ_SUPPORT
+	       "5G "
+#endif
+#ifdef  CONFIG_CW1200_DISABLE_BEACON_HINTS
+	       "DBH "
+#endif
+#ifdef CONFIG_CW1200_PM
+	       "PM "
+#endif
+#ifdef CONFIG_CW1200_DEBUGFS
+	       "DBG "
+#endif
+#ifdef CONFIG_CW1200_ETF 
+	       "ETF "
+#endif
+#ifdef CONFIG_CW1200_POLL_IRQ
+	       "IRQPOLL "
+#endif
+#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
+	       "SDIOIRQ "
+#endif
+#ifdef CONFIG_CW1200_DISABLE_BLOCKACK
+	       "NOBA "
+#endif
+	       "\n");
 
 	dev = cw1200_init_common(sizeof(struct cw1200_common), macaddr);
 	if (!dev)

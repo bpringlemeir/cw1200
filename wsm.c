@@ -842,6 +842,12 @@ static int wsm_startup_indication(struct cw1200_common *priv,
 
 	priv->wsm_caps.firmwareReady = 1;
 
+	/* Disable unsupported frequency bands */
+	if (!(priv->wsm_caps.firmwareCap & 0x1))
+	    priv->hw->wiphy->bands[IEEE80211_BAND_2GHZ] = NULL;
+	if (!(priv->wsm_caps.firmwareCap & 0x2))
+	    priv->hw->wiphy->bands[IEEE80211_BAND_5GHZ] = NULL;
+
 	wake_up(&priv->wsm_startup_done);
 	return 0;
 
@@ -1019,6 +1025,15 @@ int wsm_cmd_send(struct cw1200_common *priv,
 	size_t buf_len = buf->data - buf->begin;
 	int ret;
 
+	/* Block until the cmd buffer is completed.  Tortuous. */
+	spin_lock(&priv->wsm_cmd.lock);
+	while (!priv->wsm_cmd.done) {
+	  spin_unlock(&priv->wsm_cmd.lock);
+	  spin_lock(&priv->wsm_cmd.lock);
+	}
+	priv->wsm_cmd.done = 0;
+	spin_unlock(&priv->wsm_cmd.lock);
+
 	if (cmd == 0x0006 || cmd == 0x0005 ) /* Write/Read MIB */
 		wsm_printk(KERN_DEBUG "[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%d)\n",
 			cmd, __le16_to_cpu(((__le16 *)buf->begin)[2]),
@@ -1044,7 +1059,6 @@ int wsm_cmd_send(struct cw1200_common *priv,
 
 	spin_lock(&priv->wsm_cmd.lock);
 	BUG_ON(priv->wsm_cmd.ptr);
-	priv->wsm_cmd.done = 0;
 	priv->wsm_cmd.ptr = buf->begin;
 	priv->wsm_cmd.len = buf_len;
 	priv->wsm_cmd.arg = arg;
@@ -1073,7 +1087,7 @@ int wsm_cmd_send(struct cw1200_common *priv,
 		} while (!ret && rx_timestamp <= tmo);
 	}
 
-	if (unlikely(ret == 0)) {
+	if (unlikely(!ret && !priv->wsm_cmd.done)) {
 		u16 raceCheck;
 
 		spin_lock(&priv->wsm_cmd.lock);
@@ -1081,6 +1095,13 @@ int wsm_cmd_send(struct cw1200_common *priv,
 		priv->wsm_cmd.arg = NULL;
 		priv->wsm_cmd.ptr = NULL;
 		spin_unlock(&priv->wsm_cmd.lock);
+
+		printk(KERN_ERR "CMD req (0x%04x) stuck in firmware, killing BH\n", raceCheck);
+		print_hex_dump_bytes("REQDUMP: ", DUMP_PREFIX_NONE,
+				     buf->begin, buf_len);
+		printk(KERN_ERR "Outstanding outgoing frames:  %d\n", priv->hw_bufs_used);
+
+//		printk(KERN_ERR "Last_tx_rateidx: %d, flags 0x%02x\n", priv->last_rateidx, priv->last_flags);
 
 		/* Race condition check to make sure _confirm is not called
 		 * after exit of _send */
@@ -1175,8 +1196,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 
 	if (priv->bh_error) {
 		/* In case of failure do not wait for magic. */
-		wsm_printk(KERN_ERR "[WSM] Fatal error occured, "
-				"will not flush TX.\n");
+		printk(KERN_ERR "[WSM] Fatal error occured, will not flush TX.\n");
 		return false;
 	} else {
 		/* Get a timestamp of "oldest" frame */
@@ -1194,6 +1214,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 				timeout) <= 0) {
 			/* Hmmm... Not good. Frame had stuck in firmware. */
 			priv->bh_error = 1;
+			printk(KERN_ERR "TX Frame stuck in firmware, killing BH\n");
 			wake_up(&priv->bh_wq);
 			return false;
 		}
@@ -1207,7 +1228,7 @@ void wsm_unlock_tx(struct cw1200_common *priv)
 {
 	int tx_lock;
 	if (priv->bh_error)
-		wsm_printk(KERN_ERR "fatal error occured, unlock is unsafe\n");
+		printk(KERN_ERR "fatal error occured, unlock is unsafe\n");
 	else {
 		tx_lock = atomic_sub_return(1, &priv->tx_lock);
 		if (tx_lock < 0) {
@@ -1761,7 +1782,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	if (count)
 		return count;
 
-	if (priv->wsm_cmd.ptr) {
+	if (priv->wsm_cmd.ptr) { /* CMD request */
 		++count;
 		spin_lock(&priv->wsm_cmd.lock);
 		BUG_ON(!priv->wsm_cmd.ptr);

@@ -81,7 +81,9 @@ int cw1200_enable_listening(struct cw1200_common *priv);
 int cw1200_disable_listening(struct cw1200_common *priv);
 int cw1200_set_uapsd_param(struct cw1200_common *priv,
 				const struct wsm_edca_params *arg);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 void cw1200_ba_work(struct work_struct *work);
 void cw1200_ba_timer(unsigned long arg);
+#endif
 
 #endif

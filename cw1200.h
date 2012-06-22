@@ -172,6 +172,7 @@ struct cw1200_common {
 	bool				has_multicast_subscription;
 	bool				disable_beacon_filter;
 	struct work_struct		update_filtering_work;
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	u8				ba_tid_mask;
 	int				ba_acc;
 	int				ba_cnt;
@@ -180,6 +181,7 @@ struct cw1200_common {
 	spinlock_t			ba_lock;
 	bool				ba_ena;
 	struct work_struct              ba_work;
+#endif
 #ifdef CONFIG_CW1200_PM
 	struct cw1200_pm_state		pm_state;
 #endif
@@ -296,6 +298,11 @@ struct cw1200_common {
 
 #ifdef CONFIG_CW1200_ETF
 	struct sk_buff_head etf_q;
+#endif
+
+
+#ifdef CONFIG_CW1200_POLL_IRQ
+	struct timer_list	irqpoll_timer;
 #endif
 };
 

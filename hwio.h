@@ -163,6 +163,8 @@ struct download_cntl_t {
 #define ST90TDS_CONFIG_CLEAR_INT_BIT	(BIT(15))
 
 /* For CW1200 the IRQ Enable and Ready Bits are in CONFIG register */
+#define ST90TDS_CONF_IRQ_ENABLE 	(BIT(16))
+#define ST90TDS_CONF_RDY_ENABLE 	(BIT(17))
 #define ST90TDS_CONF_IRQ_RDY_ENABLE	(BIT(16)|BIT(17))
 
 int cw1200_data_read(struct cw1200_common *priv,
@@ -193,7 +195,8 @@ static inline int cw1200_reg_read_16(struct cw1200_common *priv,
 static inline int cw1200_reg_write_16(struct cw1200_common *priv,
 				      u16 addr, u16 val)
 {
-	return cw1200_reg_write(priv, addr, &val, sizeof(val));
+	u32 tmp = val;
+	return cw1200_reg_write(priv, addr, &tmp, sizeof(tmp));
 }
 
 static inline int cw1200_reg_read_32(struct cw1200_common *priv,

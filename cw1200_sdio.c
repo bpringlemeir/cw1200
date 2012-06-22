@@ -73,7 +73,9 @@ static int cw1200_clk_ctrl(const struct cw1200_platform_data *pdata,
 
 struct cw1200_platform_data cw1200_platform_data = {
 	.mmc_id = "mmc1",
+#ifdef CONFIG_CW1200_POLL_IRQ
 	.disable_irq = 1, /* stupid mx51bbg */
+#endif
 	.pll_init_val = DPLL_INIT_VAL_CW1200_38_4MHZ,
 //	.reset = &cw1200_href_resources[0],
 #ifdef CONFIG_CW1200_USE_GPIO_IRQ
@@ -97,6 +99,9 @@ struct sbus_priv {
 	spinlock_t		lock;
 	sbus_irq_handler	irq_handler;
 	void			*irq_priv;
+#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
+	volatile int claimed;
+#endif
 };
 
 #ifndef SDIO_VENDOR_ID_STE
@@ -131,12 +136,32 @@ static int cw1200_sdio_memcpy_toio(struct sbus_priv *self,
 
 static void cw1200_sdio_lock(struct sbus_priv *self)
 {
+#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
+	unsigned long flags;
+	spin_lock_irqsave(&self->lock, flags);
+	if (!mmc_try_claim_host(self->func->card->host)) {
+		self->claimed++;
+	}
+	spin_unlock_irqrestore(&self->lock, flags);
+#else
 	sdio_claim_host(self->func);
+#endif
 }
 
 static void cw1200_sdio_unlock(struct sbus_priv *self)
 {
+#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
+	unsigned long flags;
+	spin_lock_irqsave(&self->lock, flags);
+	if (!self->claimed) {
+		sdio_release_host(self->func);
+	} else {
+		self->claimed--;
+	}
+	spin_unlock_irqrestore(&self->lock, flags);
+#else
 	sdio_release_host(self->func);
+#endif
 }
 
 #ifndef CONFIG_CW1200_USE_GPIO_IRQ
@@ -171,7 +196,7 @@ static int cw1200_request_irq(struct sbus_priv *self,
 	u8 cccr;
 
 	ret = request_any_context_irq(irq->start, handler,
-			IRQF_TRIGGER_RISING, irq->name, self);
+			IRQF_TRIGGER_FALLING, irq->name, self);
 	if (WARN_ON(ret < 0))
 		goto exit;
 

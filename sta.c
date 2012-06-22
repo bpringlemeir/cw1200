@@ -120,8 +120,9 @@ void cw1200_stop(struct ieee80211_hw *dev)
 	cancel_delayed_work_sync(&priv->link_id_gc_work);
 	flush_workqueue(priv->workqueue);
 	del_timer_sync(&priv->mcast_timeout);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	del_timer_sync(&priv->ba_timer);
-
+#endif
 	mutex_lock(&priv->conf_mutex);
 	priv->mode = NL80211_IFTYPE_UNSPECIFIED;
 	priv->listening = false;
@@ -157,6 +158,9 @@ int cw1200_add_interface(struct ieee80211_hw *dev,
 	int ret;
 	struct cw1200_common *priv = dev->priv;
 	/* __le32 auto_calibration_mode = __cpu_to_le32(1); */
+
+	vif->driver_flags |= IEEE80211_VIF_BEACON_FILTER |
+			     IEEE80211_VIF_SUPPORTS_CQM_RSSI;
 
 	mutex_lock(&priv->conf_mutex);
 
@@ -750,9 +754,6 @@ int cw1200_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 				memset(wsm_key->tkipGroupKey.rxSeqCounter,
 					0,		8);
 				wsm_key->tkipGroupKey.keyId = key->keyidx;
-
-				print_hex_dump_bytes("TKIP: ", DUMP_PREFIX_NONE,
-					key->key, key->keylen);
 			}
 #ifdef USE_MAC80211_MIC_INSERT
 			key->flags |= IEEE80211_KEY_FLAG_GENERATE_MMIC;
@@ -1401,17 +1402,17 @@ void cw1200_join_work(struct work_struct *work)
 #endif
 
 		cw1200_update_listening(priv, false);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 		/* BlockACK policy will be updated when assoc is done */
 		WARN_ON(wsm_set_block_ack_policy(priv,
 			0, priv->ba_tid_mask));
-
 		spin_lock_bh(&priv->ba_lock);
 		priv->ba_ena = false;
 		priv->ba_cnt = 0;
 		priv->ba_acc = 0;
 		priv->ba_hist = 0;
 		spin_unlock_bh(&priv->ba_lock);
-
+#endif
 		mgmt_policy.protectedMgmtEnable = 0;
 		mgmt_policy.unprotectedMgmtFramesAllowed = 1;
 		mgmt_policy.encryptionForAuthFrame = 1;
@@ -1460,8 +1461,9 @@ void cw1200_unjoin_work(struct work_struct *work)
 	struct wsm_reset reset = {
 		.reset_statistics = true,
 	};
-
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	del_timer_sync(&priv->ba_timer);
+#endif
 	mutex_lock(&priv->conf_mutex);
 	if (unlikely(atomic_read(&priv->scan.in_progress))) {
 		if (priv->delayed_unjoin) {
@@ -1499,8 +1501,10 @@ void cw1200_unjoin_work(struct work_struct *work)
 		cancel_work_sync(&priv->event_handler);
 		cancel_delayed_work_sync(&priv->connection_loss_work);
 		cw1200_update_listening(priv, priv->listening);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 		WARN_ON(wsm_set_block_ack_policy(priv,
 			0, priv->ba_tid_mask));
+#endif
 		priv->disable_beacon_filter = false;
 		cw1200_update_filtering(priv);
 		priv->setbssparams_done = false;
@@ -1596,6 +1600,7 @@ int cw1200_set_uapsd_param(struct cw1200_common *priv,
 	return ret;
 }
 
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 void cw1200_ba_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
@@ -1611,8 +1616,10 @@ void cw1200_ba_work(struct work_struct *work)
 	tx_ba_tid_mask = priv->ba_ena ? priv->ba_tid_mask : 0;
 	spin_unlock_bh(&priv->ba_lock);
 
-	WARN_ON(wsm_set_block_ack_policy(priv,
-		tx_ba_tid_mask, priv->ba_tid_mask));
+	if (wsm_set_block_ack_policy(priv,tx_ba_tid_mask, priv->ba_tid_mask)) {
+		printk(KERN_WARNING "Block_Ack policy set failed (tx 0x%x rx 0x%x)\n",
+		       tx_ba_tid_mask, priv->ba_tid_mask);
+	}
 }
 
 void cw1200_ba_timer(unsigned long arg)
@@ -1646,3 +1653,4 @@ void cw1200_ba_timer(unsigned long arg)
 skip_statistic_update:
 	spin_unlock_bh(&priv->ba_lock);
 }
+#endif

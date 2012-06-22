@@ -784,6 +784,7 @@ cw1200_tx_h_pm_state(struct cw1200_common *priv,
 	return !was_buffered;
 }
 
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 static void
 cw1200_tx_h_ba_stat(struct cw1200_common *priv,
 		    struct cw1200_txinfo *t)
@@ -805,6 +806,7 @@ cw1200_tx_h_ba_stat(struct cw1200_common *priv,
 	}
 	spin_unlock_bh(&priv->ba_lock);
 }
+#endif
 
 /* ******************************************************************** */
 
@@ -867,7 +869,9 @@ void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	rcu_read_lock();
 	sta = rcu_dereference(t.tx_info->control.sta);
 
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	cw1200_tx_h_ba_stat(priv, &t);
+#endif
 	spin_lock_bh(&priv->ps_state_lock);
 	{
 		tid_update = cw1200_tx_h_pm_state(priv, &t);

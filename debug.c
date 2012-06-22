@@ -105,6 +105,7 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	struct list_head *item;
 	struct cw1200_common *priv = seq->private;
 	struct cw1200_debug_priv *d = priv->debug;
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	int ba_cnt, ba_acc, ba_avg = 0;
 	bool ba_ena;
 
@@ -115,6 +116,7 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	if (ba_cnt)
 		ba_avg = ba_acc / ba_cnt;
 	spin_unlock_bh(&priv->ba_lock);
+#endif
 
 	seq_puts(seq,   "CW1200 Wireless LAN driver status\n");
 	seq_printf(seq, "Hardware:   %d.%d\n",
@@ -227,9 +229,11 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 		++i;
 	spin_unlock_bh(&priv->tx_policy_cache.lock);
 	seq_printf(seq, "RC in use:  %d\n", i);
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	seq_printf(seq, "BA stat:    %d, %d (%d)\n",
 		ba_cnt, ba_acc, ba_avg);
 	seq_printf(seq, "Block ACK:  %s\n", ba_ena ? "on" : "off");
+#endif
 
 	seq_puts(seq, "\n");
 	for (i = 0; i < 4; ++i) {

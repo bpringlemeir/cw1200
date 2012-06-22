@@ -166,7 +166,7 @@ void cw1200_pm_stay_awake(struct cw1200_pm_state *pm,
 {
 	long cur_tmo;
 	spin_lock_bh(&pm->lock);
-	cur_tmo = pm->wakelock.expires - jiffies;
+	cur_tmo = pm->wakelock.ws.timer_expires - jiffies;
 	if (!wake_lock_active(&pm->wakelock) ||
 			cur_tmo < (long)tmo)
 		wake_lock_timeout(&pm->wakelock, tmo);
@@ -346,8 +346,10 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	if (ret)
 		goto revert5;
 
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	/* Cancel block ack stat timer */
 	del_timer_sync(&priv->ba_timer);
+#endif
 
 	/* Store suspend state */
 	pm_state->suspend_state = state;
@@ -430,12 +432,14 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 	cw1200_resume_work(priv, &priv->link_id_gc_work,
 			state->link_id_gc);
 
+#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	/* Restart block ack stat */
 	spin_lock_bh(&priv->ba_lock);
 	if (priv->ba_cnt)
 		mod_timer(&priv->ba_timer,
 			jiffies + CW1200_BLOCK_ACK_INTERVAL);
 	spin_unlock_bh(&priv->ba_lock);
+#endif
 
 	/* Remove UDP port filter */
 	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_off);
