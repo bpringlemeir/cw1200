@@ -577,21 +577,30 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 			info->cqm_beacon_miss_thold);
 		ap_printk(KERN_DEBUG "[CQM] TX failure subscribe: %d\n",
 			info->cqm_tx_fail_thold);
+#endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
 		priv->cqm_rssi_thold = info->cqm_rssi_thold;
 		priv->cqm_rssi_hyst = info->cqm_rssi_hyst;
-#endif /* CONFIG_CW1200_USE_STE_EXTENSIONS */
+
 		if (info->cqm_rssi_thold || info->cqm_rssi_hyst) {
 			/* RSSI subscription enabled */
 			/* TODO: It's not a correct way of setting threshold.
 			 * Upper and lower must be set equal here and adjusted
 			 * in callback. However current implementation is much
 			 * more relaible and stable. */
-			threshold.upperThreshold =
-				info->cqm_rssi_thold + info->cqm_rssi_hyst;
-			threshold.lowerThreshold =
-				info->cqm_rssi_thold;
-			threshold.rssiRcpiMode |=
-				WSM_RCPI_RSSI_THRESHOLD_ENABLE;
+
+			/* RSSI: signed Q8.0, RCPI: unsigned Q7.1
+			 * RSSI = RCPI / 2 - 110 */
+			if (priv->cqm_use_rssi) {
+				threshold.upperThreshold =
+					info->cqm_rssi_thold + info->cqm_rssi_hyst;
+				threshold.lowerThreshold =
+					info->cqm_rssi_thold;
+				threshold.rssiRcpiMode |= WSM_RCPI_RSSI_USE_RSSI;
+			} else {
+				threshold.lowerThreshold = (info->cqm_rssi_thold + 110) * 2;
+				threshold.upperThreshold = threshold.lowerThreshold + info->cqm_rssi_hyst * 2;
+			}
+			threshold.rssiRcpiMode |= WSM_RCPI_RSSI_THRESHOLD_ENABLE;
 		} else {
 			/* There is a bug in FW, see sta.c. We have to enable
 			 * dummy subscription to get correct RSSI values. */
@@ -599,6 +608,8 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				WSM_RCPI_RSSI_THRESHOLD_ENABLE |
 				WSM_RCPI_RSSI_DONT_USE_UPPER |
 				WSM_RCPI_RSSI_DONT_USE_LOWER;
+			if (priv->cqm_use_rssi)
+				threshold.rssiRcpiMode |= WSM_RCPI_RSSI_USE_RSSI;
 		}
 		WARN_ON(wsm_set_rcpi_rssi_threshold(priv, &threshold));
 
