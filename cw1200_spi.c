@@ -22,16 +22,105 @@
 
 #include <linux/spi/spi.h>
 #include <linux/device.h>
-
 #include "cw1200.h"
 #include "sbus.h"
 #include "cw1200_plat.h"
+
 #include "hwio.h"
+#include <linux/platform_device.h>
+#include <linux/netdevice.h>
+
+
+static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
+static struct spi_device *cw1200_spi_dev;
+
 
 MODULE_AUTHOR("Solomon Peachy <speachy@sagrad.com>");
 MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SPI driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("spi:cw1200_wlan_spi");
+
+
+struct sbus_priv {
+	struct spi_device	*func;
+	struct cw1200_common	*core;
+	const struct cw1200_platform_data *pdata;
+	spinlock_t		lock;
+	sbus_irq_handler	irq_handler;
+	void			*irq_priv;
+// VLAD:
+	spinlock_t      fw_reset_lock;
+};
+
+
+static struct platform_device *cw1200_fwio_dev;
+static void cw1200_fw_failure_job(struct work_struct *work);
+static int cw1200_fwio_prepare(struct device *dev)
+{
+ struct sbus_priv *self = NULL;
+
+ self = spi_get_drvdata(cw1200_spi_dev);
+ if(self) {
+  self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
+  wake_up_interruptible(&self->core->cw1200_fw_wq);
+  wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status);
+ }
+
+ return 0;
+}
+
+
+static void cw1200_fwio_complete(struct device *dev)
+{
+ struct sbus_priv *self = NULL;
+
+ self = spi_get_drvdata(cw1200_spi_dev);
+ if(self) {
+  self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+  init_waitqueue_head(&self->core->cw1200_fw_wq);
+  INIT_WORK(&self->core->cw1200_fw_failure_work, cw1200_fw_failure_job);
+  queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+ }
+
+}
+
+static const struct dev_pm_ops cw1200_fwio_ops = {
+  .prepare =  cw1200_fwio_prepare,
+  .complete =  cw1200_fwio_complete,
+};
+
+static struct class *cw1200_class;
+
+static int cw1200_fwio_probe(struct platform_device *pdev)
+{
+
+	cw1200_class = class_create(THIS_MODULE, "cw1200_fw_io");
+	  if (IS_ERR(cw1200_class)) {
+		  printk(KERN_ERR"========[  failed to create cw1200_fw_io class ]=========\n");
+	  }
+    device_create(cw1200_class,&pdev->dev,0,NULL,"cw1200_fw_io");
+
+	return 0;
+}
+
+static int cw1200_fwio_remove(struct platform_device *pdev)
+{
+	device_destroy(cw1200_class,0);
+    class_destroy(cw1200_class);
+	return 0;
+}
+
+
+static struct platform_driver cw1200_fwio_driver = {
+	.probe = cw1200_fwio_probe,
+	.remove = cw1200_fwio_remove,
+	.driver = {
+		.name = "cw1200_fw_io",
+		.pm = &cw1200_fwio_ops,
+	},
+};
+
+
 
 #ifdef CONFIG_CW1200_PM
 #define USE_IRQ_WAKE
@@ -85,14 +174,6 @@ const struct cw1200_platform_data *cw1200_get_platform_data(void)
 EXPORT_SYMBOL_GPL(cw1200_get_platform_data);
 #endif
 
-struct sbus_priv {
-	struct spi_device	*func;
-	struct cw1200_common	*core;
-	const struct cw1200_platform_data *pdata;
-	spinlock_t		lock;
-	sbus_irq_handler	irq_handler;
-	void			*irq_priv;
-};
 
 /* sbus_ops implemetation */
 
@@ -404,6 +485,179 @@ static struct sbus_ops cw1200_spi_sbus_ops = {
 	.irq_enable             = cw1200_spi_irq_enable,
 };
 
+static int cw1200_spi_suspend(struct spi_device *pdev, pm_message_t state)
+{
+
+ const struct cw1200_platform_data *pdata;
+ struct sbus_priv *self = NULL;
+ const struct resource *reset;
+
+ self = spi_get_drvdata(pdev);
+ pdata = cw1200_get_platform_data();
+ reset = pdata->reset;
+
+ if(self) {
+   if(self->core) {
+    cw1200_core_release(self->core);
+    self->core = NULL;
+   }
+ }
+/**/
+
+
+ if (reset) {
+  gpio_set_value(reset->start, 0);
+ }
+
+ if (pdata->power_ctrl)
+	pdata->power_ctrl(pdata, false);
+
+ return 0;
+}
+
+static int cw1200_spi_resume(struct spi_device *pdev)
+{
+ const struct resource *reset;
+ const struct cw1200_platform_data *pdata = cw1200_get_platform_data();
+ struct sbus_priv *self = spi_get_drvdata(pdev);
+
+
+
+ if (pdata->power_ctrl) {
+ 	pdata->power_ctrl(pdata, true);
+	msleep(50);
+ }
+
+ reset = pdata->reset;
+ if (reset) {
+		gpio_direction_output(reset->start, 1);
+		/* It is not stated in the datasheet, but at least some of devices
+		 * have problems with reset if this stage is omited. */
+		msleep(50);
+		gpio_set_value(reset->start, 0);
+		/* A valid reset shall be obtained by maintaining WRESETN
+		 * active (low) for at least two cycles of LP_CLK after VDDIO
+		 * is stable within it operating range. */
+		usleep_range(1000, 20000);
+		gpio_set_value(reset->start, 1);
+		/* The host should wait 30 ms after the WRESETN release
+		 * for the on-chip LDO to stabilize */
+		msleep(30);
+
+ }
+
+
+/************************/
+ cw1200_core_probe(&cw1200_spi_sbus_ops,
+ 				   self, &pdev->dev, &self->core,
+ 				   self->pdata->pll_init_val,
+ 				   self->pdata->macaddr);
+
+ return 0;
+}
+
+static void cw1200_fw_failure_job(struct work_struct *work)
+{
+ int status;
+ pm_message_t evt;
+ struct sbus_priv *self;
+
+ struct cw1200_common *priv =
+		container_of(work, struct cw1200_common, cw1200_fw_failure_work);
+
+ evt.event = 0;
+
+ status = wait_event_interruptible(priv->cw1200_fw_wq,CW1200_FW_ERR_IDLE != priv->cw1200_fw_error_status);
+ if(status < 0 ) {
+
+  dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw failure %d",__func__,status);
+
+ } else if (CW1200_FW_ERR_DOALARM == priv->cw1200_fw_error_status) {
+  if(cw1200_fwio_dev) { /* sending mdev event to initiate user-space driven wifi reset sequence */
+
+    platform_driver_unregister(&cw1200_fwio_driver);
+	cw1200_fwio_dev->dev.platform_data = NULL;
+	platform_device_unregister(cw1200_fwio_dev);
+	cw1200_fwio_dev = NULL;
+
+    status = wait_event_interruptible_timeout(priv->cw1200_fw_wq,priv->cw1200_fw_error_status > CW1200_FW_ERR_DOALARM,HZ*10);
+    if(status < 0 ) {
+     dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw reset command %d",__func__,status);
+    } else if(0 == status) { /* timeout*/
+     dev_err(&cw1200_spi_dev->dev,"cw1200 reset fw command timeout\n");
+    } else if( CW1200_FW_ERR_DORESET == priv->cw1200_fw_error_status) {
+     cw1200_spi_suspend(cw1200_spi_dev,evt);
+     msleep_interruptible(200);
+     cw1200_spi_resume(cw1200_spi_dev);
+    } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
+    	   goto terminate;
+    } else goto oops;
+  }
+ } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
+   goto terminate;
+ } else goto oops;
+ self = spi_get_drvdata(cw1200_spi_dev);
+
+
+ self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+ init_waitqueue_head(&self->core->cw1200_fw_wq);
+ INIT_WORK(&self->core->cw1200_fw_failure_work, cw1200_fw_failure_job);
+
+
+ if(!cw1200_fwio_dev) {
+   int ret;
+   ret = platform_driver_register(&cw1200_fwio_driver);
+   cw1200_fwio_dev = platform_device_alloc("cw1200_fw_io", 0);
+   ret = platform_device_add(cw1200_fwio_dev);
+	 if (ret) {
+		kfree(cw1200_fwio_dev);
+	 }
+ }
+ queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+ return;
+oops:
+ dev_err(&cw1200_spi_dev->dev,"%s() unexpected event: %d\n",__func__,priv->cw1200_fw_error_status);
+terminate:
+ dev_info(&cw1200_spi_dev->dev,"%s() termination \n",__func__);
+ priv->cw1200_fw_error_status = CW1200_FW_ERR_TERMINATED;
+ wake_up_interruptible(&priv->cw1200_fw_wq);
+}
+
+
+static ssize_t dev_type_show(struct device *dev,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	return sprintf(buf,"\n");
+}
+
+static ssize_t cw1200_do_reset(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t size)
+{
+ if(!strcmp(buf,"RESET\n")) {
+
+  struct sbus_priv *self = NULL;
+  pm_message_t evt;
+
+  evt.event = 0;
+  self = spi_get_drvdata(cw1200_spi_dev);
+  if(self) {
+   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DORESET;
+   wake_up_interruptible(&self->core->cw1200_fw_wq);
+  } else {
+   dev_err(&cw1200_spi_dev->dev,"%s self == NULL\n",__func__);
+  }
+ } else {
+	 return -EACCES;
+ }
+ return size;
+}
+
+DEVICE_ATTR(cw1200_fw_ok, S_IRUGO, dev_type_show, NULL);
+DEVICE_ATTR(cw1200_fw_reset, S_IWUGO, NULL, cw1200_do_reset);
+
+
 /* Probe Function to be called by SPI stack when device is discovered */
 static int __devinit cw1200_spi_probe(struct spi_device *func) 
 {
@@ -411,7 +665,14 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 	struct sbus_priv *self;
 	int status;
 
+	cw1200_fwio_workqueue = create_workqueue("cw1200_fwio_q");
+	if( NULL == cw1200_fwio_workqueue) {
+		dev_err(&func->dev,"cw1200_fwio_workqueue == NULL\n");
+		return -EFAULT;
+	}
+
 	plat_data = cw1200_get_platform_data();
+
 
 	/* Sanity check speed */
 	if (func->max_speed_hz > 52000000)
@@ -442,14 +703,43 @@ static int __devinit cw1200_spi_probe(struct spi_device *func)
 		return -ENOMEM;
 	}
 
+	spi_set_drvdata(func,self);
+
 	spin_lock_init(&self->lock);
 	self->pdata = plat_data;
 	self->func = func;
+
+	spin_lock_init(&self->fw_reset_lock);
 
 	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
 				   self, &func->dev, &self->core, 
 				   self->pdata->pll_init_val,
 				   self->pdata->macaddr);
+
+    if( 0 == status) {
+     self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+	 init_waitqueue_head(&self->core->cw1200_fw_wq);
+	 INIT_WORK(&self->core->cw1200_fw_failure_work, cw1200_fw_failure_job);
+	 queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+
+    }
+
+	cw1200_spi_dev = func;
+
+	status = device_create_file(&func->dev,&dev_attr_cw1200_fw_ok);
+	if(status) dev_err(&func->dev, "dev_attr_dev_type %d", status);
+
+	status = device_create_file(&func->dev,&dev_attr_cw1200_fw_reset);
+	if(status) dev_err(&func->dev, "dev_attr_dev_type %d", status);
+
+
+
+#if defined(CONFIG_DEBUG_FS)
+	{
+	 void cw1200_create_debugfs(void);
+     cw1200_create_debugfs();
+	}
+#endif
 
 	return status;
 }
@@ -466,12 +756,21 @@ static int __devexit cw1200_spi_disconnect(struct spi_device *func)
 		}
 		kfree(self);
 	}
+
+	destroy_workqueue(cw1200_fwio_workqueue);
 	return 0;
 }
+
+
+
 
 static struct spi_driver spi_driver = {
 	.probe		= cw1200_spi_probe,
 	.remove		= __devexit_p(cw1200_spi_disconnect),
+#if CONFIG_CW1200_PM
+    .suspend = cw1200_spi_suspend,
+    .resume  = cw1200_spi_resume,
+#endif
 	.driver = {
 		.name		= "cw1200_wlan_spi",
 		.bus            = &spi_bus_type,
@@ -508,7 +807,21 @@ static int __init cw1200_spi_init(void)
 	ret = spi_register_driver(&spi_driver);
 	if (ret)
 		goto err_reg;
+{
+	ret = platform_driver_register(&cw1200_fwio_driver);
+	if (ret)
+		return ret;
+	cw1200_fwio_dev = platform_device_alloc("cw1200_fw_io", 0);
+	if (!cw1200_fwio_dev) {
+		platform_driver_unregister(&cw1200_fwio_driver);
+		return -ENOMEM;
+	}
+	ret = platform_device_add(cw1200_fwio_dev);
+	if (ret) {
+		kfree(cw1200_fwio_dev);
+	}
 
+}
 	return 0;
 
 err_reg:
@@ -536,6 +849,106 @@ static void __exit cw1200_spi_exit(void)
 	if (pdata->clk_ctrl)
 		pdata->clk_ctrl(pdata, false);
 }
+
+int cw1200_pm_init(struct cw1200_pm_state *pm,
+		   struct cw1200_common *priv)
+{
+	return 0;
+}
+
+void cw1200_pm_deinit(struct cw1200_pm_state *pm)
+{
+
+}
+
+void cw1200_pm_stay_awake(struct cw1200_pm_state *pm,
+			  unsigned long tmo)
+{
+
+}
+
+int cw1200_wow_resume(struct ieee80211_hw *hw)
+{
+ return 0;
+}
+
+int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
+{
+	return 0;
+}
+
+#ifdef CONFIG_DEBUG_FS
+static int debugfs_cmd;
+static int cw1200_spi_suspend(struct spi_device *pdev, pm_message_t state);
+static int cw1200_spi_resume(struct spi_device *pdev);
+static int cw1200_debugfs_set_cmd(void *data, u64 val)
+{
+ debugfs_cmd = (int)val;
+ printk(KERN_CRIT"VLAD: %s(%d)\n",__func__,debugfs_cmd);
+ switch(debugfs_cmd) {
+ case 1: {
+  pm_message_t evt;
+  evt.event = 0;
+
+
+  cw1200_spi_suspend(cw1200_spi_dev,evt);
+  msleep_interruptible(100);
+  cw1200_spi_resume(cw1200_spi_dev);
+
+ } break;
+
+ case 2: {
+   if(cw1200_fwio_dev) {
+	platform_driver_unregister(&cw1200_fwio_driver);
+	cw1200_fwio_dev->dev.platform_data = NULL;
+	platform_device_unregister(cw1200_fwio_dev);
+	cw1200_fwio_dev = NULL;
+   }
+ } break;
+ case 3: {
+   if(!cw1200_fwio_dev) {
+     int ret;
+     ret = platform_driver_register(&cw1200_fwio_driver);
+     cw1200_fwio_dev = platform_device_alloc("cw1200_fw_io", 0);
+     ret = platform_device_add(cw1200_fwio_dev);
+	 if (ret) {
+		kfree(cw1200_fwio_dev);
+	 }
+   }
+ } break;
+ case 4: {
+  struct sbus_priv *self = NULL;
+  self = spi_get_drvdata(cw1200_spi_dev);
+  self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
+  wake_up_interruptible(&self->core->cw1200_fw_wq);
+
+ } break;
+
+ }
+
+ return 0;
+}
+static int cw1200_debugfs_get_cmd(void *data, u64* val)
+{
+ *val = (u64)debugfs_cmd;
+ return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_cw1200_debugfs, cw1200_debugfs_get_cmd,cw1200_debugfs_set_cmd, "%08lld\n");
+void cw1200_create_debugfs(void)
+{
+ struct dentry *regs;
+ static const mode_t dm = S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH;
+
+ regs = debugfs_create_dir("cw1200_spi", NULL);
+ if(regs) {
+  debugfs_create_file("debug_cmd", dm, regs,(void*)&debugfs_cmd, &fops_cw1200_debugfs);
+ }
+
+}
+
+#endif
+
 
 module_init(cw1200_spi_init);
 module_exit(cw1200_spi_exit);
