@@ -403,6 +403,7 @@ static struct ieee80211_hw *cw1200_init_common(size_t priv_data_len, u8 *macaddr
 	priv->wsm_dump_max_size = 20;
 #endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
 
+
 	return hw;
 }
 
@@ -427,7 +428,9 @@ int cw1200_register_common(struct ieee80211_hw *dev)
 		if (err) {
 			cw1200_dbg(CW1200_DBG_ERROR, "Cannot register device (%d).\n",
 				   err);
+#ifdef CONFIG_CW1200_PM
 			cw1200_pm_deinit(&priv->pm_state);
+#endif
 			return err;
 		}
 
@@ -464,6 +467,8 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 {
 	struct cw1200_common *priv = dev->priv;
 	int i;
+
+
 
 #ifdef CONFIG_CW1200_ETF
 	if (!etf_mode) {
