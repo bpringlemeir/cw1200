@@ -16,6 +16,11 @@
 #include "sta.h"
 #include "bh.h"
 #include "sbus.h"
+#include "cw1200_plat.h"
+#include "hwio.h"
+#include "fwio.h"
+#include <linux/gpio.h>
+
 
 #define CW1200_BEACON_SKIPPING_MULTIPLIER 3
 
@@ -81,8 +86,13 @@ static struct wsm_ether_type_filter_hdr cw1200_ether_type_filter_off = {
 };
 
 static int cw1200_suspend_late(struct device *dev);
+static int cw1200_pm_suspend(struct device *dev);
+static int cw1200_pm_resume(struct device *dev);
+static int cw1200_pm_resume_early(struct device *dev);
+
 static void cw1200_pm_release(struct device *dev);
 static int cw1200_pm_probe(struct platform_device *pdev);
+
 
 /* private */
 struct cw1200_suspend_state {
@@ -95,7 +105,10 @@ struct cw1200_suspend_state {
 };
 
 static const struct dev_pm_ops cw1200_pm_ops = {
+    .suspend = cw1200_pm_suspend,
+    .resume  = cw1200_pm_resume,
 	.suspend_noirq = cw1200_suspend_late,
+	.resume_noirq = cw1200_pm_resume_early,
 };
 
 static struct platform_driver cw1200_power_driver = {
@@ -182,6 +195,9 @@ static void cw1200_pm_stay_awake_tmo(unsigned long arg)
 int cw1200_pm_init(struct cw1200_pm_state *pm,
 		   struct cw1200_common *priv)
 {
+// VLAD:
+	return 0;
+//
 	int ret = cw1200_pm_init_common(pm, priv);
 	if (!ret) {
 		init_timer(&pm->stay_awake);
@@ -193,6 +209,9 @@ int cw1200_pm_init(struct cw1200_pm_state *pm,
 
 void cw1200_pm_deinit(struct cw1200_pm_state *pm)
 {
+// VLAD:
+	return;
+//
 	del_timer_sync(&pm->stay_awake);
 	cw1200_pm_deinit_common(pm);
 }
@@ -200,6 +219,10 @@ void cw1200_pm_deinit(struct cw1200_pm_state *pm)
 void cw1200_pm_stay_awake(struct cw1200_pm_state *pm,
 			  unsigned long tmo)
 {
+
+// VLAD:
+  return;
+//
 	long cur_tmo;
 	spin_lock_bh(&pm->lock);
 	cur_tmo = pm->stay_awake.expires - jiffies;
@@ -239,14 +262,120 @@ static int cw1200_resume_work(struct cw1200_common *priv,
 static int cw1200_suspend_late(struct device *dev)
 {
 	struct cw1200_common *priv = dev->platform_data;
+	const struct cw1200_platform_data *pdata;
+	printk(KERN_CRIT"VLAD:%s",__func__);
 	if (atomic_read(&priv->bh_rx)) {
-		wiphy_dbg(priv->hw->wiphy,
+		// VLAD:
+		wiphy_err/*dbg*/(priv->hw->wiphy,
 			"%s: Suspend interrupted.\n",
 			__func__);
 		return -EAGAIN;
 	}
+	pdata = cw1200_get_platform_data();
+	{
+	 const struct resource *reset = pdata->reset;
+	 if (reset) {
+	  gpio_set_value(reset->start, 0);
+	  printk(KERN_CRIT"VLAD:%s reset",__func__);
+	 }
+    }
+	if(pdata->power_ctrl) {
+	  pdata->power_ctrl(pdata,false);
+	  printk(KERN_CRIT"VLAD:%s power_ctrl",__func__);
+	}
+
+	priv->wsm_caps.firmwareReady = 0;
+	priv->wsm_rx_seq = 0;
+	priv->wsm_tx_seq = 0;
+	atomic_set(&priv->bh_rx, 0);
+	atomic_set(&priv->bh_tx, 0);
+	atomic_set(&priv->bh_term, 0);
+	priv->buf_id_tx = 0;
+	priv->buf_id_rx = 0;
+
+	printk(KERN_CRIT"VLAD:%s OK",__func__);
 	return 0;
 }
+
+static int cw1200_pm_resume_early(struct device *dev)
+{
+	const struct cw1200_platform_data *pdata;
+	const struct resource *reset;
+	int ret;
+
+	pdata = cw1200_get_platform_data();
+
+	if (pdata->power_ctrl) {
+		ret = pdata->power_ctrl(pdata, true);
+		if (ret)
+         return 0;
+		msleep(250);  // XXX can be lowered probably
+	}
+
+	reset = pdata->reset;
+	if (reset) {
+		gpio_direction_output(reset->start, 1);
+		/* It is not stated in the datasheet, but at least some of devices
+		 * have problems with reset if this stage is omited. */
+		msleep(50);
+		gpio_set_value(reset->start, 0);
+		/* A valid reset shall be obtained by maintaining WRESETN
+		 * active (low) for at least two cycles of LP_CLK after VDDIO
+		 * is stable within it operating range. */
+		usleep_range(1000, 20000);
+		gpio_set_value(reset->start, 1);
+		/* The host should wait 30 ms after the WRESETN release
+		 * for the on-chip LDO to stabilize */
+		msleep(30);
+
+	}
+
+
+	printk(KERN_CRIT"VLAD:%s",__func__);
+
+	return 0;
+}
+
+
+static int cw1200_pm_resume(struct device *dev)
+{
+	struct cw1200_common *priv;
+	struct ieee80211_hw *hw;
+	int err = 0;
+
+	printk(KERN_CRIT"VLAD:%s",__func__);
+
+    priv = dev->platform_data;
+    hw = priv->hw;
+
+	/* Resume BH thread */
+	WARN_ON(cw1200_bh_resume(priv));
+
+	err = cw1200_load_firmware(priv); /* does priv->sbus_ops->irq_subscribe there as well */
+    if(err) {
+    	printk(KERN_CRIT"VLAD:cw1200_load_firmware:%d\n",err);
+    }
+
+	return cw1200_wow_resume(hw);
+}
+
+
+static int cw1200_pm_suspend(struct device *dev)
+{
+	struct cw1200_common *priv;
+	struct ieee80211_hw *hw;
+	int ret;
+
+    priv = dev->platform_data;
+    hw = priv->hw;
+
+    ret = priv->sbus_ops->irq_unsubscribe(priv->sbus_priv);
+
+	printk(KERN_CRIT"VLAD:%s (%s) \n",__func__,dev->driver->name);
+
+	return cw1200_wow_suspend(hw,NULL);
+}
+
 
 static void cw1200_pm_release(struct device *dev)
 {
@@ -257,7 +386,7 @@ static int cw1200_pm_probe(struct platform_device *pdev)
 	pdev->dev.release = cw1200_pm_release;
 	return 0;
 }
-
+#if 1
 int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 {
 	struct cw1200_common *priv = hw->priv;
@@ -265,35 +394,48 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	struct cw1200_suspend_state *state;
 	int ret;
 
+	printk(KERN_CRIT"VLAD:%s",__func__);
+
 #ifndef CONFIG_WAKELOCK
 	spin_lock_bh(&pm_state->lock);
 	ret = timer_pending(&pm_state->stay_awake);
 	spin_unlock_bh(&pm_state->lock);
-	if (ret)
+	if (ret) {
+		printk(KERN_CRIT"VLAD:%s 1",__func__);
 		return -EAGAIN;
+	}
 #endif
 
 	/* Do not suspend when datapath is not idle */
-	if (priv->tx_queue_stats.num_queued)
+	if (priv->tx_queue_stats.num_queued) {
+		printk(KERN_CRIT"VLAD:%s 2",__func__);
 		return -EBUSY;
+	}
 
 	/* Make sure there is no configuration requests in progress. */
-	if (!mutex_trylock(&priv->conf_mutex))
+	if (!mutex_trylock(&priv->conf_mutex)) {
+		printk(KERN_CRIT"VLAD:%s 3",__func__);
 		return -EBUSY;
+	}
 
 	/* Ensure pending operations are done.
 	 * Note also that wow_suspend must return in ~2.5sec, before
 	 * watchdog is triggered. */
-	if (priv->channel_switch_in_progress)
+	if (priv->channel_switch_in_progress) {
+		printk(KERN_CRIT"VLAD:%s 4",__func__);
 		goto revert1;
-
+	}
 	/* Do not suspend when join work is scheduled */
-	if (work_pending(&priv->join_work))
+	if (work_pending(&priv->join_work)) {
+		printk(KERN_CRIT"VLAD:%s 5",__func__);
 		goto revert1;
+	}
 
 	/* Do not suspend when scanning */
-	if (down_trylock(&priv->scan.lock))
+	if (down_trylock(&priv->scan.lock)) {
+		printk(KERN_CRIT"VLAD:%s 6",__func__);
 		goto revert1;
+	}
 
 	/* Lock TX. */
 	wsm_lock_tx_async(priv);
@@ -301,8 +443,10 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	/* Wait to avoid possible race with bh code.
 	 * But do not wait too long... */
 	if (wait_event_timeout(priv->bh_evt_wq,
-			!priv->hw_bufs_used, HZ / 10) <= 0)
+			!priv->hw_bufs_used, HZ / 10) <= 0) {
+		printk(KERN_CRIT"VLAD:%s 7",__func__);
 		goto revert2;
+	}
 
 	/* Set UDP filter */
 	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_on.hdr);
@@ -312,8 +456,10 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 
 	/* Allocate state */
 	state = kzalloc(sizeof(struct cw1200_suspend_state), GFP_KERNEL);
-	if (!state)
+	if (!state) {
+		printk(KERN_CRIT"VLAD:%s 8",__func__);
 		goto revert3;
+	}
 
 	/* Store delayed work states. */
 	state->bss_loss_tmo =
@@ -339,12 +485,16 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	}
 
 	/* Stop serving thread */
-	if (cw1200_bh_suspend(priv))
+	if (cw1200_bh_suspend(priv)) {
+		printk(KERN_CRIT"VLAD:%s 9",__func__);
 		goto revert4;
+	}
 
 	ret = timer_pending(&priv->mcast_timeout);
-	if (ret)
+	if (ret) {
+		printk(KERN_CRIT"VLAD:%s 10",__func__);
 		goto revert5;
+	}
 
 #ifndef CONFIG_CW1200_DISABLE_BLOCKACK
 	/* Cancel block ack stat timer */
@@ -367,9 +517,10 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	/* Force resume if event is coming from the device. */
 	if (atomic_read(&priv->bh_rx)) {
 		cw1200_wow_resume(hw);
+		printk(KERN_CRIT"VLAD:%s 11",__func__);
 		return -EAGAIN;
 	}
-
+	printk(KERN_CRIT"VLAD:%s OK",__func__);
 	return 0;
 
 revert5:
@@ -402,6 +553,12 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 	struct cw1200_common *priv = hw->priv;
 	struct cw1200_pm_state *pm_state = &priv->pm_state;
 	struct cw1200_suspend_state *state;
+	struct wsm_operational_mode mode = {
+		.power_mode = cw1200_power_mode,
+		.disableMoreFlagUsage = true,
+	};
+
+	printk(KERN_CRIT"VLAD:%s",__func__);
 
 	state = pm_state->suspend_state;
 	pm_state->suspend_state = NULL;
@@ -410,9 +567,22 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 	priv->sbus_ops->power_mgmt(priv->sbus_priv, false);
 
 	/* Resume BH thread */
-	WARN_ON(cw1200_bh_resume(priv));
+//	WARN_ON(cw1200_bh_resume(priv));
+
+	if (wait_event_interruptible_timeout(priv->wsm_startup_done,
+				priv->wsm_caps.firmwareReady, 3*HZ) <= 0) {
+    	printk(KERN_CRIT"VLAD:cw1200 firmware ready: waiting timeout\n");
+	}
+
+	/* Set low-power mode. */
+	WARN_ON(wsm_set_operational_mode(priv, &mode));
+
+	/* Enable multi-TX confirmation */
+	WARN_ON(wsm_use_multi_tx_conf(priv, true));
+
 
 	if (state->beacon_skipping) {
+		printk(KERN_CRIT"VLAD: %s state->beacon_skipping true\n",__func__);
 		wsm_set_beacon_wakeup_period(priv, priv->beacon_int *
 				priv->join_dtim_period >
 				MAX_BEACON_SKIP_TIME_MS ? 1 :
@@ -441,6 +611,8 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 	spin_unlock_bh(&priv->ba_lock);
 #endif
 
+
+
 	/* Remove UDP port filter */
 	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_off);
 
@@ -461,3 +633,145 @@ int cw1200_wow_resume(struct ieee80211_hw *hw)
 
 	return 0;
 }
+#else
+int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
+{
+	struct cw1200_common *priv = hw->priv;
+	struct cw1200_pm_state *pm_state = &priv->pm_state;
+	struct cw1200_suspend_state *state;
+	int ret;
+
+	printk(KERN_CRIT"VLAD:%s",__func__);
+
+#ifndef CONFIG_WAKELOCK
+	spin_lock_bh(&pm_state->lock);
+	ret = timer_pending(&pm_state->stay_awake);
+	spin_unlock_bh(&pm_state->lock);
+	if (ret) {
+		printk(KERN_CRIT"VLAD:%s 1",__func__);
+		return -EAGAIN;
+	}
+#endif
+
+	/* Do not suspend when datapath is not idle */
+	if (priv->tx_queue_stats.num_queued) {
+		printk(KERN_CRIT"VLAD:%s 2",__func__);
+		return -EBUSY;
+	}
+
+	/* Make sure there is no configuration requests in progress. */
+	if (!mutex_trylock(&priv->conf_mutex)) {
+		printk(KERN_CRIT"VLAD:%s 3",__func__);
+		return -EBUSY;
+	}
+
+	/* Ensure pending operations are done.
+	 * Note also that wow_suspend must return in ~2.5sec, before
+	 * watchdog is triggered. */
+	if (priv->channel_switch_in_progress) {
+		printk(KERN_CRIT"VLAD:%s 4",__func__);
+		goto revert1;
+	}
+	/* Do not suspend when join work is scheduled */
+	if (work_pending(&priv->join_work)) {
+		printk(KERN_CRIT"VLAD:%s 5",__func__);
+		goto revert1;
+	}
+
+	/* Do not suspend when scanning */
+	if (down_trylock(&priv->scan.lock)) {
+		printk(KERN_CRIT"VLAD:%s 6",__func__);
+		goto revert1;
+	}
+
+	/* Lock TX. */
+	wsm_lock_tx_async(priv);
+
+	/* Wait to avoid possible race with bh code.
+	 * But do not wait too long... */
+	if (wait_event_timeout(priv->bh_evt_wq,
+			!priv->hw_bufs_used, HZ / 10) <= 0) {
+		printk(KERN_CRIT"VLAD:%s 7",__func__);
+		goto revert2;
+	}
+
+
+
+	/* Stop serving thread */
+	if (cw1200_bh_suspend(priv)) {
+		printk(KERN_CRIT"VLAD:%s 9",__func__);
+		goto revert4;
+	}
+
+	ret = timer_pending(&priv->mcast_timeout);
+	if (ret) {
+		printk(KERN_CRIT"VLAD:%s 10",__func__);
+		goto revert5;
+	}
+
+
+	/* Force resume if event is coming from the device. */
+	if (atomic_read(&priv->bh_rx)) {
+		cw1200_wow_resume(hw);
+		printk(KERN_CRIT"VLAD:%s 11",__func__);
+		return -EAGAIN;
+	}
+
+
+	return 0;
+
+revert5:
+	WARN_ON(cw1200_bh_resume(priv));
+revert4:
+revert3:
+	wsm_set_udp_port_filter(priv, &cw1200_udp_port_filter_off);
+	wsm_set_ether_type_filter(priv, &cw1200_ether_type_filter_off);
+revert2:
+	wsm_unlock_tx(priv);
+	up(&priv->scan.lock);
+revert1:
+	mutex_unlock(&priv->conf_mutex);
+	return -EBUSY;
+}
+
+int cw1200_wow_resume(struct ieee80211_hw *hw)
+{
+	struct cw1200_common *priv = hw->priv;
+	struct cw1200_pm_state *pm_state = &priv->pm_state;
+	struct cw1200_suspend_state *state;
+	struct wsm_operational_mode mode = {
+		.power_mode = cw1200_power_mode,
+		.disableMoreFlagUsage = true,
+	};
+
+	printk(KERN_CRIT"VLAD:%s",__func__);
+
+
+	/* Resume BH thread */
+	WARN_ON(cw1200_bh_resume(priv));
+
+	if (wait_event_interruptible_timeout(priv->wsm_startup_done,
+				priv->wsm_caps.firmwareReady, 3*HZ) <= 0) {
+    	printk(KERN_CRIT"VLAD:cw1200 firmware ready: waiting timeout\n");
+	}
+
+	/* Set low-power mode. */
+	WARN_ON(wsm_set_operational_mode(priv, &mode));
+
+	/* Enable multi-TX confirmation */
+	WARN_ON(wsm_use_multi_tx_conf(priv, true));
+
+
+	/* Unlock datapath */
+	wsm_unlock_tx(priv);
+
+	/* Unlock scan */
+	up(&priv->scan.lock);
+
+	/* Unlock configuration mutex */
+	mutex_unlock(&priv->conf_mutex);
+
+	return 0;
+}
+
+#endif
