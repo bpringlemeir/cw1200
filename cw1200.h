@@ -91,6 +91,14 @@ enum cw1200_bss_loss_status {
 	CW1200_BSS_LOSS_CONFIRMED,
 };
 
+enum cw1200_fw_error_status {
+    CW1200_FW_ERR_IDLE = 0,
+    CW1200_FW_ERR_DOALARM,
+    CW1200_FW_ERR_DORESET,
+    CW1200_FW_ERR_DOTERMINATE,
+    CW1200_FW_ERR_TERMINATED,
+};
+
 extern int cw1200_power_mode;
 
 struct cw1200_link_entry {
@@ -304,6 +312,11 @@ struct cw1200_common {
 #ifdef CONFIG_CW1200_POLL_IRQ
 	struct timer_list	irqpoll_timer;
 #endif
+
+// VLAD:
+	struct work_struct cw1200_fw_failure_work;
+	wait_queue_head_t cw1200_fw_wq;
+	int cw1200_fw_error_status;
 };
 
 struct cw1200_sta_priv {
