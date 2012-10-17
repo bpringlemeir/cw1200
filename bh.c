@@ -162,6 +162,9 @@ int cw1200_bh_suspend(struct cw1200_common *priv)
 	bh_printk(KERN_DEBUG "[BH] suspend.\n");
 	if (WARN_ON(priv->bh_error))
 		return 0;
+#ifdef CONFIG_CW1200_POLL_IRQ
+	del_timer_sync(&priv->irqpoll_timer);
+#endif
 
 	atomic_set(&priv->bh_suspend, CW1200_BH_SUSPEND);
 	wake_up(&priv->bh_wq);
@@ -178,6 +181,15 @@ int cw1200_bh_resume(struct cw1200_common *priv)
 
 	atomic_set(&priv->bh_suspend, CW1200_BH_RESUME);
 	wake_up(&priv->bh_wq);
+
+#ifdef CONFIG_CW1200_POLL_IRQ
+	init_timer(&priv->irqpoll_timer);
+	priv->irqpoll_timer.data = (unsigned long) priv;
+	priv->irqpoll_timer.function = cw1200_irqpoll_timer_fn;
+	mod_timer(&priv->irqpoll_timer, jiffies + HZ/100);
+#endif
+
+
 	return wait_event_timeout(priv->bh_evt_wq, priv->bh_error ||
 		(CW1200_BH_RESUMED == atomic_read(&priv->bh_suspend)),
 		1 * HZ) ? 0 : -ETIMEDOUT;
@@ -351,6 +363,9 @@ static int cw1200_bh(void *arg)
 					0 : atomic_read(&priv->bh_suspend);
 				(rx || tx || term || suspend || priv->bh_error);
 			}), status);
+
+		if(term)
+			break;
 
 		if (status < 0 || term || priv->bh_error) { /* Error */
 			if (status < 0 
@@ -679,6 +694,9 @@ tx:
 				break;
 		}
 #endif
+// VLAD: waking up SoC reset and restart sequence
+		priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
+    	wake_up_interruptible(&priv->cw1200_fw_wq);
 	}
 	return 0;
 }
