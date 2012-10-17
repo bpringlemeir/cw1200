@@ -11,7 +11,7 @@ cw1200_core-y := \
 		scan.o
 cw1200_core-$(CONFIG_CW1200_DEBUGFS)	+= debug.o
 cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
-cw1200_core-$(CONFIG_CW1200_PM)		+= pm.o
+#cw1200_core-$(CONFIG_CW1200_PM)		+= pm.o
 
 cw1200_wlan_sdio-y := cw1200_sdio.o
 cw1200_wlan_spi-y := cw1200_spi.o
