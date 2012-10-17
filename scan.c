@@ -59,8 +59,8 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 
 	if (req->n_ssids == 1 && !req->ssids[0].ssid_len)
 		req->n_ssids = 0;
-
-	wiphy_dbg(hw->wiphy, "[SCAN] Scan request for %d SSIDs.\n",
+	wiphy_dbg(priv->hw->wiphy,
+	"[SCAN] Scan request for %d SSIDs.\n",
 		req->n_ssids);
 
 	if (req->n_ssids > WSM_SCAN_MAX_NUM_OF_SSIDS)
@@ -170,10 +170,12 @@ void cw1200_scan_work(struct work_struct *work)
 			wiphy_dbg(priv->hw->wiphy,
 					"[SCAN] Scan failed (%d).\n",
 					priv->scan.status);
-		else if (priv->scan.req)
+		else if (priv->scan.req) {
+
 			wiphy_dbg(priv->hw->wiphy,
-					"[SCAN] Scan completed.\n");
-		else
+
+					"[SCAN] Scan completed. %.8X\n",(u32)priv->scan.req->dev);
+		} else
 			wiphy_dbg(priv->hw->wiphy,
 					"[SCAN] Scan canceled.\n");
 
@@ -292,7 +294,8 @@ static void cw1200_scan_restart_delayed(struct cw1200_common *priv)
 static void cw1200_scan_complete(struct cw1200_common *priv)
 {
 	if (priv->scan.direct_probe) {
-		wiphy_dbg(priv->hw->wiphy, "[SCAN] Direct probe complete.\n");
+			wiphy_dbg(priv->hw->wiphy,
+				"[SCAN] Direct probe complete.\n");
 		cw1200_scan_restart_delayed(priv);
 		priv->scan.direct_probe = 0;
 		up(&priv->scan.lock);
@@ -364,8 +367,8 @@ void cw1200_probe_work(struct work_struct *work)
 	u8 *ies;
 	size_t ies_len;
 	int ret;
-
-	wiphy_dbg(priv->hw->wiphy, "[SCAN] Direct probe work.\n");
+	wiphy_dbg(priv->hw->wiphy,
+			"[SCAN] Direct probe work.\n");
 
 	BUG_ON(queueId >= 4);
 	BUG_ON(!priv->channel);
