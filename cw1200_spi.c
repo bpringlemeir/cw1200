@@ -33,7 +33,7 @@
 
 static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static struct spi_device *cw1200_spi_dev;
-
+static int cw1200_fw_reset_cnt = 0;
 
 MODULE_AUTHOR("Solomon Peachy <speachy@sagrad.com>");
 MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SPI driver");
@@ -574,7 +574,7 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 
  } else if (CW1200_FW_ERR_DOALARM == priv->cw1200_fw_error_status) {
   if(cw1200_fwio_dev) { /* sending mdev event to initiate user-space driven wifi reset sequence */
-
+    dev_info(&cw1200_spi_dev->dev,"cw1200 firmware exception detected, preparing to reset\n");
     platform_driver_unregister(&cw1200_fwio_driver);
 	cw1200_fwio_dev->dev.platform_data = NULL;
 	platform_device_unregister(cw1200_fwio_dev);
@@ -586,6 +586,8 @@ static void cw1200_fw_failure_job(struct work_struct *work)
     } else if(0 == status) { /* timeout*/
      dev_err(&cw1200_spi_dev->dev,"cw1200 reset fw command timeout\n");
     } else if( CW1200_FW_ERR_DORESET == priv->cw1200_fw_error_status) {
+     dev_info(&cw1200_spi_dev->dev,"executing cw1200 firmware reset\n");
+     cw1200_fw_reset_cnt++;
      cw1200_spi_suspend(cw1200_spi_dev,evt);
      msleep_interruptible(200);
      cw1200_spi_resume(cw1200_spi_dev);
@@ -593,6 +595,11 @@ static void cw1200_fw_failure_job(struct work_struct *work)
     	   goto terminate;
     } else goto oops;
   }
+ } else if (CW1200_FW_ERR_DORESET ==  priv->cw1200_fw_error_status) {
+     dev_info(&cw1200_spi_dev->dev,"external request to reset cw1200 firmware received\n");
+     cw1200_spi_suspend(cw1200_spi_dev,evt);
+     msleep_interruptible(200);
+     cw1200_spi_resume(cw1200_spi_dev);
  } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
    goto terminate;
  } else goto oops;
@@ -628,7 +635,7 @@ static ssize_t dev_type_show(struct device *dev,
 			     struct device_attribute *attr,
 			     char *buf)
 {
-	return sprintf(buf,"\n");
+	return sprintf(buf,"%d\n",cw1200_fw_reset_cnt);
 }
 
 static ssize_t cw1200_do_reset(struct device *dev,
