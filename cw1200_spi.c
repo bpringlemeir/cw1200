@@ -857,33 +857,6 @@ static void __exit cw1200_spi_exit(void)
 		pdata->clk_ctrl(pdata, false);
 }
 
-int cw1200_pm_init(struct cw1200_pm_state *pm,
-		   struct cw1200_common *priv)
-{
-	return 0;
-}
-
-void cw1200_pm_deinit(struct cw1200_pm_state *pm)
-{
-
-}
-
-void cw1200_pm_stay_awake(struct cw1200_pm_state *pm,
-			  unsigned long tmo)
-{
-
-}
-
-int cw1200_wow_resume(struct ieee80211_hw *hw)
-{
- return 0;
-}
-
-int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
-{
-	return 0;
-}
-
 #ifdef CONFIG_DEBUG_FS
 static int debugfs_cmd;
 static int cw1200_spi_suspend(struct spi_device *pdev, pm_message_t state);

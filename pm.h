@@ -35,6 +35,7 @@ struct cw1200_pm_state {
 	spinlock_t lock;
 };
 
+#if 0 /* NBS change, not included in build. */
 int cw1200_pm_init(struct cw1200_pm_state *pm,
 		    struct cw1200_common *priv);
 void cw1200_pm_deinit(struct cw1200_pm_state *pm);
@@ -44,6 +45,24 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw,
 		       struct cfg80211_wowlan *wowlan);
 int cw1200_wow_resume(struct ieee80211_hw *hw);
 
+#else /* NBS all pm functions as inline stubs. */
+
+static inline int cw1200_pm_init(struct cw1200_pm_state *pm,
+		   struct cw1200_common *priv)
+{return 0;}
+
+static inline void cw1200_pm_deinit(struct cw1200_pm_state *pm){}
+static inline void cw1200_pm_stay_awake(struct cw1200_pm_state *pm,
+			  unsigned long tmo){}
+
+static inline int cw1200_wow_resume(struct ieee80211_hw *hw)
+{return 0;}
+
+static inline int cw1200_wow_suspend(struct ieee80211_hw *hw,
+                                     struct cfg80211_wowlan *wowlan)
+{return 0;}
+
+#endif
 #endif /* CONFIG_CW1200_PM */
 
 #endif
