@@ -681,7 +681,9 @@ tx:
 		cw1200_pm_stay_awake(&priv->pm_state, 3*HZ);
 #endif
 		/* TODO: schedule_work(recovery) */
-#ifndef HAS_PUT_TASK_STRUCT
+// VLAD: no need to worry
+//#ifndef HAS_PUT_TASK_STRUCT
+#if 0
 		/* The only reason of having this stupid code here is
 		 * that __put_task_struct is not exported by kernel. */
 		for (;;) {
