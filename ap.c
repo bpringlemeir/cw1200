@@ -50,6 +50,11 @@ int cw1200_sta_add(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct cw1200_link_entry *entry;
 	struct sk_buff *skb;
 
+	if(priv->bh_error) {
+		return -EIO;
+	}
+
+
 	if (priv->mode != NL80211_IFTYPE_AP)
 		return 0;
 
@@ -80,6 +85,10 @@ int cw1200_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct cw1200_sta_priv *sta_priv =
 			(struct cw1200_sta_priv *)&sta->drv_priv;
 	struct cw1200_link_entry *entry;
+
+	if(priv->bh_error) {
+		return -EIO;
+	}
 
 	if (priv->mode != NL80211_IFTYPE_AP || !sta_priv->link_id)
 		return 0;
@@ -145,6 +154,10 @@ void cw1200_sta_notify(struct ieee80211_hw *dev,
 	struct cw1200_common *priv = dev->priv;
 	struct cw1200_sta_priv *sta_priv =
 		(struct cw1200_sta_priv *)&sta->drv_priv;
+
+	if(priv->bh_error) {
+		return ;
+	}
 
 	spin_lock_bh(&priv->ps_state_lock);
 	__cw1200_sta_notify(dev, vif, notify_cmd, sta_priv->link_id);
@@ -217,6 +230,10 @@ int cw1200_set_tim(struct ieee80211_hw *dev, struct ieee80211_sta *sta,
 		   bool set)
 {
 	struct cw1200_common *priv = dev->priv;
+	if(priv->bh_error) {
+		return -EIO;
+	}
+
 	queue_work(priv->workqueue, &priv->set_tim_work);
 	return 0;
 }
@@ -309,6 +326,10 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 			     u32 changed)
 {
 	struct cw1200_common *priv = dev->priv;
+
+	if(priv->bh_error) {
+		return;
+	}
 
 	mutex_lock(&priv->conf_mutex);
 	if (changed & BSS_CHANGED_BSSID) {
