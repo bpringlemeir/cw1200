@@ -9,6 +9,8 @@
  * published by the Free Software Foundation.
  */
 
+// #define DEBUG
+
 #include <linux/sched.h>
 #include "cw1200.h"
 #include "scan.h"
@@ -52,6 +54,11 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 
 	if (!priv->vif)
 		return -EINVAL;
+
+	if(priv->bh_error) {
+		return -EIO;
+	}
+
 
 	/* Scan when P2P_GO corrupt firmware MiniAP mode */
 	if (priv->join_status == CW1200_JOIN_STATUS_AP)
