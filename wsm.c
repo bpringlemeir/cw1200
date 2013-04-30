@@ -1109,9 +1109,11 @@ int wsm_cmd_send(struct cw1200_common *priv,
 			/* If wsm_handle_rx got stuck in _confirm we will hang
 			 * system there. It's better than silently currupt
 			 * stack or heap, isn't it? */
-			BUG_ON(wait_event_timeout(
-					priv->wsm_cmd_wq, priv->wsm_cmd.done,
-					WSM_CMD_LAST_CHANCE_TIMEOUT) <= 0);
+
+			if( wait_event_timeout(priv->wsm_cmd_wq, priv->wsm_cmd.done,WSM_CMD_LAST_CHANCE_TIMEOUT) <= 0) {
+				printk(KERN_ERR"[%s] last chance timeout!\n",__func__);
+				BUG_ON(1);
+			}
 		}
 
 		/* Kill BH thread to report the error to the top layer. */
@@ -1227,6 +1229,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 void wsm_unlock_tx(struct cw1200_common *priv)
 {
 	int tx_lock;
+#if 0
 	if (priv->bh_error)
 		printk(KERN_ERR "fatal error occured, unlock is unsafe\n");
 	else {
@@ -1238,6 +1241,19 @@ void wsm_unlock_tx(struct cw1200_common *priv)
 			wsm_printk(KERN_DEBUG "[WSM] TX is unlocked.\n");
 		}
 	}
+#else
+	if (priv->bh_error) {
+		printk(KERN_ERR "fatal error occured, unlock is unsafe (tx_lock = %d)\n",priv->tx_lock);
+	}
+
+		tx_lock = atomic_sub_return(1, &priv->tx_lock);
+		if (tx_lock < 0) {
+			BUG_ON(1);
+		} else if (tx_lock == 0) {
+			cw1200_bh_wakeup(priv);
+			wsm_printk(KERN_DEBUG "[WSM] TX is unlocked.\n");
+		}
+#endif
 }
 
 /* ******************************************************************** */
