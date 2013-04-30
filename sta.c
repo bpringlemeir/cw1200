@@ -258,6 +258,11 @@ int cw1200_config(struct ieee80211_hw *dev, u32 changed)
 	struct cw1200_common *priv = dev->priv;
 	struct ieee80211_conf *conf = &dev->conf;
 
+
+	if(priv->bh_error) {
+		return -EIO;
+	}
+
 	down(&priv->scan.lock);
 	mutex_lock(&priv->conf_mutex);
 	/* TODO: IEEE80211_CONF_CHANGE_QOS */
@@ -570,6 +575,10 @@ void cw1200_configure_filter(struct ieee80211_hw *dev,
 			FIF_BCN_PRBRESP_PROMISC |
 			FIF_PROBE_REQ;
 
+	if(priv->bh_error) {
+		return;
+	}
+
 	down(&priv->scan.lock);
 	mutex_lock(&priv->conf_mutex);
 
@@ -600,6 +609,10 @@ int cw1200_conf_tx(struct ieee80211_hw *dev, struct ieee80211_vif *vif,
 	int ret = 0;
 	/* To prevent re-applying PM request OID again and again*/
 	bool old_uapsdFlags;
+
+	if(priv->bh_error) {
+		return -EIO;
+	}
 
 	mutex_lock(&priv->conf_mutex);
 
@@ -683,6 +696,10 @@ int cw1200_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 {
 	int ret = -EOPNOTSUPP;
 	struct cw1200_common *priv = dev->priv;
+
+	if(priv->bh_error) {
+		return -EIO;
+	}
 
 	mutex_lock(&priv->conf_mutex);
 
