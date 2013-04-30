@@ -681,24 +681,10 @@ tx:
 		cw1200_pm_stay_awake(&priv->pm_state, 3*HZ);
 #endif
 		/* TODO: schedule_work(recovery) */
-// VLAD: no need to worry
-//#ifndef HAS_PUT_TASK_STRUCT
-#if 0
-		/* The only reason of having this stupid code here is
-		 * that __put_task_struct is not exported by kernel. */
-		for (;;) {
-			int status = wait_event_interruptible(priv->bh_wq, ({
-				term = atomic_xchg(&priv->bh_term, 0);
-				(term);
-				}));
-
-			if (status || term)
-				break;
-		}
-#endif
 // VLAD: waking up SoC reset and restart sequence
 		priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
     	wake_up_interruptible(&priv->cw1200_fw_wq);
+
 	}
 	return 0;
 }
