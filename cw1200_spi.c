@@ -29,7 +29,7 @@
 #include "hwio.h"
 #include <linux/platform_device.h>
 #include <linux/netdevice.h>
-
+#include <linux/rtnetlink.h>
 
 static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static struct spi_device *cw1200_spi_dev;
@@ -580,11 +580,13 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 	platform_device_unregister(cw1200_fwio_dev);
 	cw1200_fwio_dev = NULL;
 
-    status = wait_event_interruptible_timeout(priv->cw1200_fw_wq,priv->cw1200_fw_error_status > CW1200_FW_ERR_DOALARM,HZ*10);
+    status = wait_event_interruptible_timeout(priv->cw1200_fw_wq,priv->cw1200_fw_error_status > CW1200_FW_ERR_DOALARM,HZ*60*5);
     if(status < 0 ) {
      dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw reset command %d",__func__,status);
+     goto terminate;
     } else if(0 == status) { /* timeout*/
      dev_err(&cw1200_spi_dev->dev,"cw1200 reset fw command timeout\n");
+     goto terminate;
     } else if( CW1200_FW_ERR_DORESET == priv->cw1200_fw_error_status) {
      dev_info(&cw1200_spi_dev->dev,"executing cw1200 firmware reset\n");
      cw1200_fw_reset_cnt++;
