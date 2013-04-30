@@ -827,6 +827,10 @@ void cw1200_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	u8 flags = 0;
 	int ret;
 
+	if(priv->bh_error) {
+		goto drop;
+	}
+
 	t.hdrlen = ieee80211_hdrlen(t.hdr->frame_control);
 	t.da = ieee80211_get_DA(t.hdr);
 	t.sta_priv =
