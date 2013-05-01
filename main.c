@@ -505,7 +505,7 @@ void cw1200_unregister_common(struct ieee80211_hw *dev)
 	}
 #endif
 
-	if (priv->sdd) {
+	if (priv->sdd && !priv->fixed_sdd) {
 		release_firmware(priv->sdd);
 		priv->sdd = NULL;
 	}

@@ -143,6 +143,7 @@ struct cw1200_common {
 	/* calibration, output power limit and rssi<->dBm conversation data */
 
 	/* BBP/MAC state */
+	int				fixed_sdd;
 	const struct firmware		*sdd;
 	struct ieee80211_rate		*rates;
 	struct ieee80211_rate		*mcs_rates;

@@ -63,6 +63,8 @@ static int config_reg_write_stlc9000(struct cw1200_common *priv,
 	return cw1200_reg_write_16(priv, reg, (u16)val);
 }
 
+extern const struct firmware fw_wsm_22;
+
 static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 {
 	int ret, block, num_blocks;
@@ -72,6 +74,7 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	u8 *buf = NULL;
 	const char *fw_path;
 	const struct firmware *firmware = NULL;
+	int release = 1;
 
 	/* Macroses are local. */
 #define APB_WRITE(reg, val) \
@@ -127,6 +130,8 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 		break;
 	case CW1200_HW_REV_CUT22:
 		fw_path = FIRMWARE_CUT22;
+        firmware = &fw_wsm_22;
+        release = 0;
 		break;
 	default:
 		cw1200_dbg(CW1200_DBG_ERROR,
@@ -161,13 +166,15 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 #endif
 
 	/* Load a firmware file */
-	ret = request_firmware(&firmware, fw_path, priv->pdev);
-	if (ret) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			   "%s: can't load firmware file %s.\n",
-			   __func__, fw_path);
-		goto error;
-	}
+    if(!firmware) {
+        ret = request_firmware(&firmware, fw_path, priv->pdev);
+        if (ret) {
+            cw1200_dbg(CW1200_DBG_ERROR,
+                       "%s: can't load firmware file %s.\n",
+                       __func__, fw_path);
+            goto error;
+        }
+    }
 	BUG_ON(!firmware->data);
 
 	buf = kmalloc(DOWNLOAD_BLOCK_SIZE, GFP_KERNEL | GFP_DMA);
@@ -280,7 +287,7 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 
 error:
 	kfree(buf);
-	if (firmware)
+	if (firmware && release)
 		release_firmware(firmware);
 	return ret;
 

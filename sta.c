@@ -1192,6 +1192,7 @@ static int cw1200_parse_SDD_file(struct cw1200_common *priv)
 	#undef FIELD_OFFSET
 }
 
+extern const struct firmware fw_sdd_22;
 
 int cw1200_setup_mac(struct cw1200_common *priv)
 {
@@ -1221,6 +1222,7 @@ int cw1200_setup_mac(struct cw1200_common *priv)
 			.dot11StationId = &priv->mac_addr[0],
 		};
 
+        priv->fixed_sdd = 0;
 		switch (priv->hw_revision) {
 		case CW1200_HW_REV_CUT10:
 			sdd_path = SDD_FILE_10;
@@ -1233,20 +1235,23 @@ int cw1200_setup_mac(struct cw1200_common *priv)
 			break;
 		case CW1200_HW_REV_CUT22:
 			sdd_path = SDD_FILE_22;
+            priv->sdd = &fw_sdd_22;
+            priv->fixed_sdd = 1;
 			break;
 		default:
 			BUG_ON(1);
 		}
 
-		ret = request_firmware(&priv->sdd,
-			sdd_path, priv->pdev);
-
-		if (unlikely(ret)) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: can't load sdd file %s.\n",
-				__func__, sdd_path);
-			return ret;
-		}
+        if(!priv->fixed_sdd) {
+            ret = request_firmware(&priv->sdd,
+                                   sdd_path, priv->pdev);
+            if (unlikely(ret)) {
+                cw1200_dbg(CW1200_DBG_ERROR,
+                           "%s: can't load sdd file %s.\n",
+                           __func__, sdd_path);
+                return ret;
+            }
+        }
 
 		cfg.dpdData = priv->sdd->data;
 		cfg.dpdData_size = priv->sdd->size;
