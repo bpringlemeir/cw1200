@@ -15,7 +15,7 @@ cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
 #cw1200_core-$(CONFIG_CW1200_PM)		+= pm.o
 
 # For gas '.incbin' in cw1200_fw_bin.S with older versions.
-EXTRA_AFLAGS := -I$(src)
+EXTRA_AFLAGS := -Xassembler -I$(srctree)/$(src)
 
 cw1200_wlan_sdio-y := cw1200_sdio.o
 cw1200_wlan_spi-y := cw1200_spi.o
