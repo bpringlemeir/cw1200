@@ -3,7 +3,7 @@
  * DebugFS code
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -15,12 +15,16 @@
 #include <linux/seq_file.h>
 #include "cw1200.h"
 #include "debug.h"
+#include "fwio.h"
 
 /* join_status */
 static const char * const cw1200_debug_join_status[] = {
 	"passive",
 	"monitor",
+	"station (joining)",
+	"station (not authenticated yet)",
 	"station",
+	"adhoc",
 	"access point",
 };
 
@@ -31,13 +35,6 @@ static const char * const cw1200_debug_preamble[] = {
 	"long on 1 and 2 Mbps",
 };
 
-static const char * const cw1200_debug_fw_types[] = {
-	"ETF",
-	"WFM",
-	"WSM",
-	"HI test",
-	"Platform test",
-};
 
 static const char * const cw1200_debug_link_id[] = {
 	"OFF",
@@ -56,7 +53,7 @@ static const char *cw1200_debug_mode(int mode)
 	case NL80211_IFTYPE_STATION:
 		return "station";
 	case NL80211_IFTYPE_ADHOC:
-		return "ad-hok";
+		return "adhoc";
 	case NL80211_IFTYPE_MESH_POINT:
 		return "mesh point";
 	case NL80211_IFTYPE_AP:
@@ -75,16 +72,16 @@ static void cw1200_queue_status_show(struct seq_file *seq,
 {
 	int i;
 	seq_printf(seq, "Queue       %d:\n", q->queue_id);
-	seq_printf(seq, "  capacity: %d\n", q->capacity);
-	seq_printf(seq, "  queued:   %d\n", q->num_queued);
-	seq_printf(seq, "  pending:  %d\n", q->num_pending);
-	seq_printf(seq, "  sent:     %d\n", q->num_sent);
+	seq_printf(seq, "  capacity: %zu\n", q->capacity);
+	seq_printf(seq, "  queued:   %zu\n", q->num_queued);
+	seq_printf(seq, "  pending:  %zu\n", q->num_pending);
+	seq_printf(seq, "  sent:     %zu\n", q->num_sent);
 	seq_printf(seq, "  locked:   %s\n", q->tx_locked_cnt ? "yes" : "no");
 	seq_printf(seq, "  overfull: %s\n", q->overfull ? "yes" : "no");
 	seq_puts(seq,   "  link map: 0-> ");
 	for (i = 0; i < q->stats->map_capacity; ++i)
 		seq_printf(seq, "%.2d ", q->link_map_cache[i]);
-	seq_printf(seq, "<-%d\n", q->stats->map_capacity);
+	seq_printf(seq, "<-%zu\n", q->stats->map_capacity);
 }
 
 static void cw1200_debug_print_map(struct seq_file *seq,
@@ -96,7 +93,7 @@ static void cw1200_debug_print_map(struct seq_file *seq,
 	seq_printf(seq, "%s0-> ", label);
 	for (i = 0; i < priv->tx_queue_stats.map_capacity; ++i)
 		seq_printf(seq, "%s ", (map & BIT(i)) ? "**" : "..");
-	seq_printf(seq, "<-%d\n", priv->tx_queue_stats.map_capacity - 1);
+	seq_printf(seq, "<-%zu\n", priv->tx_queue_stats.map_capacity - 1);
 }
 
 static int cw1200_status_show(struct seq_file *seq, void *v)
@@ -105,135 +102,106 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	struct list_head *item;
 	struct cw1200_common *priv = seq->private;
 	struct cw1200_debug_priv *d = priv->debug;
-#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
-	int ba_cnt, ba_acc, ba_avg = 0;
-	bool ba_ena;
-
-	spin_lock_bh(&priv->ba_lock);
-	ba_cnt = priv->debug->ba_cnt;
-	ba_acc = priv->debug->ba_acc;
-	ba_ena = priv->ba_ena;
-	if (ba_cnt)
-		ba_avg = ba_acc / ba_cnt;
-	spin_unlock_bh(&priv->ba_lock);
-#endif
 
 	seq_puts(seq,   "CW1200 Wireless LAN driver status\n");
 	seq_printf(seq, "Hardware:   %d.%d\n",
-		priv->wsm_caps.hardwareId,
-		priv->wsm_caps.hardwareSubId);
+		   priv->wsm_caps.hw_id,
+		   priv->wsm_caps.hw_subid);
 	seq_printf(seq, "Firmware:   %s %d.%d\n",
-		cw1200_debug_fw_types[priv->wsm_caps.firmwareType],
-		priv->wsm_caps.firmwareVersion,
-		priv->wsm_caps.firmwareBuildNumber);
+		   cw1200_fw_types[priv->wsm_caps.fw_type],
+		   priv->wsm_caps.fw_ver,
+		   priv->wsm_caps.fw_build);
 	seq_printf(seq, "FW API:     %d\n",
-		priv->wsm_caps.firmwareApiVer);
+		   priv->wsm_caps.fw_api);
 	seq_printf(seq, "FW caps:    0x%.4X\n",
-		priv->wsm_caps.firmwareCap);
+		   priv->wsm_caps.fw_cap);
+	seq_printf(seq, "FW label:  '%s'\n",
+		   priv->wsm_caps.fw_label);
 	seq_printf(seq, "Mode:       %s%s\n",
-		cw1200_debug_mode(priv->mode),
-		priv->listening ? " (listening)" : "");
-	seq_printf(seq, "Assoc:      %s\n",
-		cw1200_debug_join_status[priv->join_status]);
+		   cw1200_debug_mode(priv->mode),
+		   priv->listening ? " (listening)" : "");
+	seq_printf(seq, "Join state: %s\n",
+		   cw1200_debug_join_status[priv->join_status]);
 	if (priv->channel)
 		seq_printf(seq, "Channel:    %d%s\n",
-			priv->channel->hw_value,
-			priv->channel_switch_in_progress ?
-			" (switching)" : "");
+			   priv->channel->hw_value,
+			   priv->channel_switch_in_progress ?
+			   " (switching)" : "");
 	if (priv->rx_filter.promiscuous)
 		seq_puts(seq,   "Filter:     promisc\n");
 	else if (priv->rx_filter.fcs)
 		seq_puts(seq,   "Filter:     fcs\n");
 	if (priv->rx_filter.bssid)
 		seq_puts(seq,   "Filter:     bssid\n");
-	if (priv->bf_control.bcn_count)
+	if (!priv->disable_beacon_filter)
 		seq_puts(seq,   "Filter:     beacons\n");
 
 	if (priv->enable_beacon ||
-			priv->mode == NL80211_IFTYPE_AP ||
-			priv->mode == NL80211_IFTYPE_ADHOC ||
-			priv->mode == NL80211_IFTYPE_MESH_POINT ||
-			priv->mode == NL80211_IFTYPE_P2P_GO)
+	    priv->mode == NL80211_IFTYPE_AP ||
+	    priv->mode == NL80211_IFTYPE_ADHOC ||
+	    priv->mode == NL80211_IFTYPE_MESH_POINT ||
+	    priv->mode == NL80211_IFTYPE_P2P_GO)
 		seq_printf(seq, "Beaconing:  %s\n",
-			priv->enable_beacon ?
-			"enabled" : "disabled");
-	if (priv->ssid_length ||
-			priv->mode == NL80211_IFTYPE_AP ||
-			priv->mode == NL80211_IFTYPE_ADHOC ||
-			priv->mode == NL80211_IFTYPE_MESH_POINT ||
-			priv->mode == NL80211_IFTYPE_P2P_GO)
-		seq_printf(seq, "SSID:       %.*s\n",
-			priv->ssid_length, priv->ssid);
+			   priv->enable_beacon ?
+			   "enabled" : "disabled");
 
-	for (i = 0; i < 4; ++i) {
+	for (i = 0; i < 4; ++i)
 		seq_printf(seq, "EDCA(%d):    %d, %d, %d, %d, %d\n", i,
-			priv->edca.params[i].cwMin,
-			priv->edca.params[i].cwMax,
-			priv->edca.params[i].aifns,
-			priv->edca.params[i].txOpLimit,
-			priv->edca.params[i].maxReceiveLifetime);
-	}
+			   priv->edca.params[i].cwmin,
+			   priv->edca.params[i].cwmax,
+			   priv->edca.params[i].aifns,
+			   priv->edca.params[i].txop_limit,
+			   priv->edca.params[i].max_rx_lifetime);
+
 	if (priv->join_status == CW1200_JOIN_STATUS_STA) {
-		static const char *pmMode = "unknown";
-		switch (priv->powersave_mode.pmMode) {
+		static const char *pm_mode = "unknown";
+		switch (priv->powersave_mode.mode) {
 		case WSM_PSM_ACTIVE:
-			pmMode = "off";
+			pm_mode = "off";
 			break;
 		case WSM_PSM_PS:
-			pmMode = "on";
+			pm_mode = "on";
 			break;
 		case WSM_PSM_FAST_PS:
-			pmMode = "dynamic";
+			pm_mode = "dynamic";
 			break;
 		}
 		seq_printf(seq, "Preamble:   %s\n",
-			cw1200_debug_preamble[
-			priv->association_mode.preambleType]);
+			   cw1200_debug_preamble[priv->association_mode.preamble]);
 		seq_printf(seq, "AMPDU spcn: %d\n",
-			priv->association_mode.mpduStartSpacing);
+			   priv->association_mode.mpdu_start_spacing);
 		seq_printf(seq, "Basic rate: 0x%.8X\n",
-			le32_to_cpu(priv->association_mode.basicRateSet));
+			   le32_to_cpu(priv->association_mode.basic_rate_set));
 		seq_printf(seq, "Bss lost:   %d beacons\n",
-			priv->bss_params.beaconLostCount);
+			   priv->bss_params.beacon_lost_count);
 		seq_printf(seq, "AID:        %d\n",
-			priv->bss_params.aid);
+			   priv->bss_params.aid);
 		seq_printf(seq, "Rates:      0x%.8X\n",
-			priv->bss_params.operationalRateSet);
-		seq_printf(seq, "Powersave:  %s\n", pmMode);
+			   priv->bss_params.operational_rate_set);
+		seq_printf(seq, "Powersave:  %s\n", pm_mode);
 	}
 	seq_printf(seq, "HT:         %s\n",
-		cw1200_is_ht(&priv->ht_info) ? "on" : "off");
+		   cw1200_is_ht(&priv->ht_info) ? "on" : "off");
 	if (cw1200_is_ht(&priv->ht_info)) {
 		seq_printf(seq, "Greenfield: %s\n",
-			cw1200_ht_greenfield(&priv->ht_info) ? "yes" : "no");
+			   cw1200_ht_greenfield(&priv->ht_info) ? "yes" : "no");
 		seq_printf(seq, "AMPDU dens: %d\n",
-			cw1200_ht_ampdu_density(&priv->ht_info));
+			   cw1200_ht_ampdu_density(&priv->ht_info));
 	}
 	seq_printf(seq, "RSSI thold: %d\n",
-		priv->cqm_rssi_thold);
+		   priv->cqm_rssi_thold);
 	seq_printf(seq, "RSSI hyst:  %d\n",
-		priv->cqm_rssi_hyst);
-	seq_printf(seq, "TXFL thold: %d\n",
-		priv->cqm_tx_failure_thold);
-	seq_printf(seq, "Linkloss:   %d\n",
-		priv->cqm_link_loss_count);
-	seq_printf(seq, "Bcnloss:    %d\n",
-		priv->cqm_beacon_loss_count);
+		   priv->cqm_rssi_hyst);
 	seq_printf(seq, "Long retr:  %d\n",
-		priv->long_frame_max_tx_count);
+		   priv->long_frame_max_tx_count);
 	seq_printf(seq, "Short retr: %d\n",
-		priv->short_frame_max_tx_count);
+		   priv->short_frame_max_tx_count);
 	spin_lock_bh(&priv->tx_policy_cache.lock);
 	i = 0;
 	list_for_each(item, &priv->tx_policy_cache.used)
 		++i;
 	spin_unlock_bh(&priv->tx_policy_cache.lock);
 	seq_printf(seq, "RC in use:  %d\n", i);
-#ifndef CONFIG_CW1200_DISABLE_BLOCKACK
-	seq_printf(seq, "BA stat:    %d, %d (%d)\n",
-		ba_cnt, ba_acc, ba_avg);
-	seq_printf(seq, "Block ACK:  %s\n", ba_ena ? "on" : "off");
-#endif
 
 	seq_puts(seq, "\n");
 	for (i = 0; i < 4; ++i) {
@@ -242,83 +210,79 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	}
 
 	cw1200_debug_print_map(seq, priv, "Link map:   ",
-		priv->link_id_map);
+			       priv->link_id_map);
 	cw1200_debug_print_map(seq, priv, "Asleep map: ",
-		priv->sta_asleep_mask);
+			       priv->sta_asleep_mask);
 	cw1200_debug_print_map(seq, priv, "PSPOLL map: ",
-		priv->pspoll_mask);
+			       priv->pspoll_mask);
 
 	seq_puts(seq, "\n");
 
 	for (i = 0; i < CW1200_MAX_STA_IN_AP_MODE; ++i) {
 		if (priv->link_id_db[i].status) {
 			seq_printf(seq, "Link %d:     %s, %pM\n",
-				i + 1, cw1200_debug_link_id[
-				priv->link_id_db[i].status],
-				priv->link_id_db[i].mac);
+				   i + 1,
+				   cw1200_debug_link_id[priv->link_id_db[i].status],
+				   priv->link_id_db[i].mac);
 		}
 	}
 
 	seq_puts(seq, "\n");
 
 	seq_printf(seq, "BH status:  %s\n",
-		atomic_read(&priv->bh_term) ? "terminated" : "alive");
+		   atomic_read(&priv->bh_term) ? "terminated" : "alive");
 	seq_printf(seq, "Pending RX: %d\n",
-		atomic_read(&priv->bh_rx));
+		   atomic_read(&priv->bh_rx));
 	seq_printf(seq, "Pending TX: %d\n",
-		atomic_read(&priv->bh_tx));
+		   atomic_read(&priv->bh_tx));
 	if (priv->bh_error)
 		seq_printf(seq, "BH errcode: %d\n",
-			priv->bh_error);
+			   priv->bh_error);
 	seq_printf(seq, "TX bufs:    %d x %d bytes\n",
-		priv->wsm_caps.numInpChBufs,
-		priv->wsm_caps.sizeInpChBuf);
+		   priv->wsm_caps.input_buffers,
+		   priv->wsm_caps.input_buffer_size);
 	seq_printf(seq, "Used bufs:  %d\n",
-		priv->hw_bufs_used);
+		   priv->hw_bufs_used);
 	seq_printf(seq, "Powermgmt:  %s\n",
-		priv->powersave_enabled ? "on" : "off");
+		   priv->powersave_enabled ? "on" : "off");
 	seq_printf(seq, "Device:     %s\n",
-		priv->device_can_sleep ? "alseep" : "awake");
+		   priv->device_can_sleep ? "asleep" : "awake");
 
 	spin_lock(&priv->wsm_cmd.lock);
 	seq_printf(seq, "WSM status: %s\n",
-		priv->wsm_cmd.done ? "idle" : "active");
-	seq_printf(seq, "WSM cmd:    0x%.4X (%d bytes)\n",
-		priv->wsm_cmd.cmd, priv->wsm_cmd.len);
+		   priv->wsm_cmd.done ? "idle" : "active");
+	seq_printf(seq, "WSM cmd:    0x%.4X (%td bytes)\n",
+		   priv->wsm_cmd.cmd, priv->wsm_cmd.len);
 	seq_printf(seq, "WSM retval: %d\n",
-		priv->wsm_cmd.ret);
+		   priv->wsm_cmd.ret);
 	spin_unlock(&priv->wsm_cmd.lock);
 
 	seq_printf(seq, "Datapath:   %s\n",
-		atomic_read(&priv->tx_lock) ? "locked" : "unlocked");
+		   atomic_read(&priv->tx_lock) ? "locked" : "unlocked");
 	if (atomic_read(&priv->tx_lock))
 		seq_printf(seq, "TXlock cnt: %d\n",
-			atomic_read(&priv->tx_lock));
+			   atomic_read(&priv->tx_lock));
 
 	seq_printf(seq, "TXed:       %d\n",
-		d->tx);
+		   d->tx);
 	seq_printf(seq, "AGG TXed:   %d\n",
-		d->tx_agg);
+		   d->tx_agg);
 	seq_printf(seq, "MULTI TXed: %d (%d)\n",
-		d->tx_multi, d->tx_multi_frames);
+		   d->tx_multi, d->tx_multi_frames);
 	seq_printf(seq, "RXed:       %d\n",
-		d->rx);
+		   d->rx);
 	seq_printf(seq, "AGG RXed:   %d\n",
-		d->rx_agg);
+		   d->rx_agg);
 	seq_printf(seq, "TX miss:    %d\n",
-		d->tx_cache_miss);
+		   d->tx_cache_miss);
 	seq_printf(seq, "TX align:   %d\n",
-		d->tx_align);
+		   d->tx_align);
 	seq_printf(seq, "TX burst:   %d\n",
-		d->tx_burst);
-	seq_printf(seq, "RX burst:   %d\n",
-		d->rx_burst);
+		   d->tx_burst);
 	seq_printf(seq, "TX TTL:     %d\n",
-		d->tx_ttl);
+		   d->tx_ttl);
 	seq_printf(seq, "Scan:       %s\n",
-		atomic_read(&priv->scan.in_progress) ? "active" : "idle");
-	seq_printf(seq, "Led state:  0x%.2X\n",
-		priv->softled_state);
+		   atomic_read(&priv->scan.in_progress) ? "active" : "idle");
 
 	return 0;
 }
@@ -341,42 +305,40 @@ static int cw1200_counters_show(struct seq_file *seq, void *v)
 {
 	int ret;
 	struct cw1200_common *priv = seq->private;
-	struct wsm_counters_table counters;
+	struct wsm_mib_counters_table counters;
 
 	ret = wsm_get_counters_table(priv, &counters);
 	if (ret)
 		return ret;
 
-#define CAT_STR(x, y) x ## y
 #define PUT_COUNTER(tab, name) \
 	seq_printf(seq, "%s:" tab "%d\n", #name, \
-		__le32_to_cpu(counters.CAT_STR(count, name)))
+		__le32_to_cpu(counters.name))
 
-	PUT_COUNTER("\t\t", PlcpErrors);
-	PUT_COUNTER("\t\t", FcsErrors);
-	PUT_COUNTER("\t\t", TxPackets);
-	PUT_COUNTER("\t\t", RxPackets);
-	PUT_COUNTER("\t\t", RxPacketErrors);
-	PUT_COUNTER("\t",   RxDecryptionFailures);
-	PUT_COUNTER("\t\t", RxMicFailures);
-	PUT_COUNTER("\t",   RxNoKeyFailures);
-	PUT_COUNTER("\t",   TxMulticastFrames);
-	PUT_COUNTER("\t",   TxFramesSuccess);
-	PUT_COUNTER("\t",   TxFrameFailures);
-	PUT_COUNTER("\t",   TxFramesRetried);
-	PUT_COUNTER("\t",   TxFramesMultiRetried);
-	PUT_COUNTER("\t",   RxFrameDuplicates);
-	PUT_COUNTER("\t\t", RtsSuccess);
-	PUT_COUNTER("\t\t", RtsFailures);
-	PUT_COUNTER("\t\t", AckFailures);
-	PUT_COUNTER("\t",   RxMulticastFrames);
-	PUT_COUNTER("\t",   RxFramesSuccess);
-	PUT_COUNTER("\t",   RxCMACICVErrors);
-	PUT_COUNTER("\t\t", RxCMACReplays);
-	PUT_COUNTER("\t",   RxMgmtCCMPReplays);
+	PUT_COUNTER("\t\t", plcp_errors);
+	PUT_COUNTER("\t\t", fcs_errors);
+	PUT_COUNTER("\t\t", tx_packets);
+	PUT_COUNTER("\t\t", rx_packets);
+	PUT_COUNTER("\t\t", rx_packet_errors);
+	PUT_COUNTER("\t",   rx_decryption_failures);
+	PUT_COUNTER("\t\t", rx_mic_failures);
+	PUT_COUNTER("\t",   rx_no_key_failures);
+	PUT_COUNTER("\t",   tx_multicast_frames);
+	PUT_COUNTER("\t",   tx_frames_success);
+	PUT_COUNTER("\t",   tx_frame_failures);
+	PUT_COUNTER("\t",   tx_frames_retried);
+	PUT_COUNTER("\t",   tx_frames_multi_retried);
+	PUT_COUNTER("\t",   rx_frame_duplicates);
+	PUT_COUNTER("\t\t", rts_success);
+	PUT_COUNTER("\t\t", rts_failures);
+	PUT_COUNTER("\t\t", ack_failures);
+	PUT_COUNTER("\t",   rx_multicast_frames);
+	PUT_COUNTER("\t",   rx_frames_success);
+	PUT_COUNTER("\t",   rx_cmac_icv_errors);
+	PUT_COUNTER("\t\t", rx_cmac_replays);
+	PUT_COUNTER("\t",   rx_mgmt_ccmp_replays);
 
 #undef PUT_COUNTER
-#undef CAT_STR
 
 	return 0;
 }
@@ -401,48 +363,6 @@ static int cw1200_generic_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static ssize_t cw1200_11n_read(struct file *file,
-	char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct cw1200_common *priv = file->private_data;
-	struct ieee80211_supported_band *band =
-		priv->hw->wiphy->bands[IEEE80211_BAND_2GHZ];
-	return simple_read_from_buffer(user_buf, count, ppos,
-		band->ht_cap.ht_supported ? "1\n" : "0\n", 2);
-}
-
-static ssize_t cw1200_11n_write(struct file *file,
-	const char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct cw1200_common *priv = file->private_data;
-	struct ieee80211_supported_band *band[2] = {
-		priv->hw->wiphy->bands[IEEE80211_BAND_2GHZ],
-		priv->hw->wiphy->bands[IEEE80211_BAND_5GHZ],
-	};
-	char buf[1];
-	int ena = 0;
-
-	if (!count)
-		return -EINVAL;
-	if (copy_from_user(buf, user_buf, 1))
-		return -EFAULT;
-	if (buf[0] == 1)
-		ena = 1;
-
-	band[0]->ht_cap.ht_supported = ena;
-	if (band[1]) 
-		band[1]->ht_cap.ht_supported = ena;
-
-	return count;
-}
-
-static const struct file_operations fops_11n = {
-	.open = cw1200_generic_open,
-	.read = cw1200_11n_read,
-	.write = cw1200_11n_write,
-	.llseek = default_llseek,
-};
-
 #ifdef CONFIG_CW1200_ETF
 static int cw1200_etf_out_show(struct seq_file *seq, void *v)
 {
@@ -452,11 +372,8 @@ static int cw1200_etf_out_show(struct seq_file *seq, void *v)
 
 	skb = skb_dequeue(&priv->etf_q);
 
-#ifdef ETF_DEBUG
-	printk(KERN_INFO "ETF_OUT (skb %p len %d)\n", skb, skb? skb->len : 0);
-#endif
-
-	if (skb) len = skb->len;
+	if (skb)
+		len = skb->len;
 
 	seq_write(seq, &len, sizeof(len));
 
@@ -483,7 +400,8 @@ static const struct file_operations fops_etf_out = {
 };
 
 struct etf_req_msg;
-int ETF_Request(struct cw1200_common *priv, struct etf_req_msg *msg, u32 len);
+static int etf_request(struct cw1200_common *priv,
+		       struct etf_req_msg *msg, u32 len);
 
 #define MAX_RX_SZE 2600
 
@@ -496,7 +414,8 @@ struct etf_in_state {
 
 static int cw1200_etf_in_open(struct inode *inode, struct file *file)
 {
-	struct etf_in_state *etf = kmalloc(sizeof(struct etf_in_state), GFP_KERNEL);
+	struct etf_in_state *etf = kmalloc(sizeof(struct etf_in_state),
+					   GFP_KERNEL);
 
 	if (!etf)
 		return -ENOMEM;
@@ -523,20 +442,15 @@ static ssize_t cw1200_etf_in_write(struct file *file,
 
 	ssize_t written = 0;
 
-#ifdef ETF_DEBUG
-	printk(KERN_INFO "ETF_IN_W (%d/%d) @%llu (count %d)\n", 
-	       etf->written, etf->total_len,
-	       *ppos, count);
-#endif
-
 	if (!etf->total_len) {
 		if (count < sizeof(etf->total_len)) {
-			printk(KERN_ERR "count < sizeof(total_len)\n");
+			pr_err("count < sizeof(total_len)\n");
 			return -EINVAL;
 		}
 
-		if (copy_from_user(&etf->total_len, user_buf, sizeof(etf->total_len))) {
-			printk(KERN_ERR "copy_from_user (len) failed\n");
+		if (copy_from_user(&etf->total_len, user_buf,
+				   sizeof(etf->total_len))) {
+			pr_err("copy_from_user (len) failed\n");
 			return -EFAULT;
 		}
 
@@ -547,8 +461,9 @@ static ssize_t cw1200_etf_in_write(struct file *file,
 	if (!count)
 		goto done;
 
-	if (copy_from_user(etf->buf + etf->written, user_buf + written, count)) {
-		printk(KERN_ERR "copy_from_user (payload %d) failed\n", count);
+	if (copy_from_user(etf->buf + etf->written, user_buf + written,
+			   count)) {
+		pr_err("copy_from_user (payload %zu) failed\n", count);
 		return -EFAULT;
 	}
 
@@ -556,8 +471,9 @@ static ssize_t cw1200_etf_in_write(struct file *file,
 	etf->written += count;
 
 	if (etf->written >= etf->total_len) {
-		if (ETF_Request(etf->priv, (struct etf_req_msg *)etf->buf, etf->total_len)) {
-			printk(KERN_ERR "ETF_Request failed\n");
+		if (etf_request(etf->priv, (struct etf_req_msg *)etf->buf,
+				etf->total_len)) {
+			pr_err("etf_request failed\n");
 			return -EIO;
 		}
 	}
@@ -574,34 +490,6 @@ static const struct file_operations fops_etf_in = {
 	.owner = THIS_MODULE,
 };
 #endif /* CONFIG_CW1200_ETF */
-
-#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
-static ssize_t cw1200_hang_write(struct file *file,
-	const char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct cw1200_common *priv = file->private_data;
-	char buf[1];
-
-	if (!count)
-		return -EINVAL;
-	if (copy_from_user(buf, user_buf, 1))
-		return -EFAULT;
-
-	if (priv->vif) {
-		cw1200_pm_stay_awake(&priv->pm_state, 3*HZ);
-		ieee80211_driver_hang_notify(priv->vif, GFP_KERNEL);
-	} else
-		return -ENODEV;
-
-	return count;
-}
-
-static const struct file_operations fops_hang = {
-	.open = cw1200_generic_open,
-	.write = cw1200_hang_write,
-	.llseek = default_llseek,
-};
-#endif
 
 static ssize_t cw1200_wsm_dumps(struct file *file,
 	const char __user *user_buf, size_t count, loff_t *ppos)
@@ -628,50 +516,6 @@ static const struct file_operations fops_wsm_dumps = {
 	.llseek = default_llseek,
 };
 
-#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
-static ssize_t cw1200_short_dump_read(struct file *file,
-	char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct cw1200_common *priv = file->private_data;
-	char buf[20];
-	size_t size = 0;
-
-	sprintf(buf, "Size: %u\n", priv->wsm_dump_max_size);
-	size = strlen(buf);
-
-	return simple_read_from_buffer(user_buf, count, ppos,
-					buf, size);
-}
-
-static ssize_t cw1200_short_dump_write(struct file *file,
-	const char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct cw1200_common *priv = file->private_data;
-	char buf[20];
-	unsigned long dump_size = 0;
-
-	if (!count || count > 20)
-		return -EINVAL;
-	if (copy_from_user(buf, user_buf, count))
-		return -EFAULT;
-
-	if (kstrtoul(buf, 10, &dump_size))
-		return -EINVAL;
-	printk(KERN_ERR "%s get %lu\n", __func__, dump_size);
-
-	priv->wsm_dump_max_size = dump_size;
-
-	return count;
-}
-
-static const struct file_operations fops_short_dump = {
-	.open = cw1200_generic_open,
-	.write = cw1200_short_dump_write,
-	.read = cw1200_short_dump_read,
-	.llseek = default_llseek,
-};
-#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
-
 int cw1200_debug_init(struct cw1200_common *priv)
 {
 	int ret = -ENOMEM;
@@ -682,20 +526,16 @@ int cw1200_debug_init(struct cw1200_common *priv)
 		return ret;
 
 	d->debugfs_phy = debugfs_create_dir("cw1200",
-			priv->hw->wiphy->debugfsdir);
+					    priv->hw->wiphy->debugfsdir);
 	if (!d->debugfs_phy)
 		goto err;
 
 	if (!debugfs_create_file("status", S_IRUSR, d->debugfs_phy,
-			priv, &fops_status))
+				 priv, &fops_status))
 		goto err;
 
 	if (!debugfs_create_file("counters", S_IRUSR, d->debugfs_phy,
-			priv, &fops_counters))
-		goto err;
-
-	if (!debugfs_create_file("11n", S_IRUSR | S_IWUSR,
-			d->debugfs_phy, priv, &fops_11n))
+				 priv, &fops_counters))
 		goto err;
 
 #ifdef CONFIG_CW1200_ETF
@@ -711,21 +551,9 @@ int cw1200_debug_init(struct cw1200_common *priv)
 	}
 #endif /* CONFIG_CW1200_ETF */
 
-#if defined(CONFIG_CW1200_USE_STE_EXTENSIONS)
-	if (!debugfs_create_file("hang", S_IWUSR, d->debugfs_phy,
-			priv, &fops_hang))
-		goto err;
-#endif
-
 	if (!debugfs_create_file("wsm_dumps", S_IWUSR, d->debugfs_phy,
-			priv, &fops_wsm_dumps))
+				 priv, &fops_wsm_dumps))
 		goto err;
-
-#if defined(CONFIG_CW1200_WSM_DUMPS_SHORT)
-	if (!debugfs_create_file("wsm_dump_size", S_IRUSR | S_IWUSR,
-			d->debugfs_phy, priv, &fops_short_dump))
-		goto err;
-#endif /* CONFIG_CW1200_WSM_DUMPS_SHORT */
 
 	ret = cw1200_itp_init(priv);
 	if (ret)
@@ -750,21 +578,12 @@ void cw1200_debug_release(struct cw1200_common *priv)
 	}
 }
 
-int cw1200_print_fw_version(struct cw1200_common *priv, u8 *buf, size_t len)
-{
-	return snprintf(buf, len, "%s %d.%d",
-			cw1200_debug_fw_types[priv->wsm_caps.firmwareType],
-			priv->wsm_caps.firmwareVersion,
-			priv->wsm_caps.firmwareBuildNumber);
-}
-
 #ifdef CONFIG_CW1200_ETF
 struct cw1200_sdd {
 	u8 id;
 	u8 len;
 	u8 data[];
 };
-#define SDD_REFERENCE_FREQUENCY_ELT_ID 0xc5
 
 struct etf_req_msg {
 	u32 id;
@@ -772,54 +591,16 @@ struct etf_req_msg {
 	u8 data[];
 };
 
-int Parse_SDD_File(struct cw1200_common *priv, u8 *data, u32 length)
+static int parse_sdd_file(struct cw1200_common *priv, u8 *data, u32 length)
 {
 	struct cw1200_sdd *ie;
 
 	while (length > 0) {
-		ie = (struct cw1200_sdd *) data;
+		ie = (struct cw1200_sdd *)data;
 		if (ie->id == SDD_REFERENCE_FREQUENCY_ELT_ID) {
-			u16 clk = cpu_to_le16(*((u16*)ie->data));
-			switch (clk) {
-			case 0x32C8:
-				priv->init_pll_val = 0x1D89D241;
-				break;
-			case 0x3E80:
-				priv->init_pll_val = 0x1E1;
-				break;
-			case 0x41A0:
-				priv->init_pll_val = 0x124931C1;
-				break;
-			case 0x4B00:
-				priv->init_pll_val = 0x191;
-				break;
-			case 0x5DC0:
-				priv->init_pll_val = 0x141;
-				break;
-			case 0x6590:
-				priv->init_pll_val = 0x0EC4F121;
-				break;
-			case 0x8340:
-				priv->init_pll_val = 0x92490E1;
-				break;
-			case 0x9600:
-				priv->init_pll_val = 0x100010C1;
-				break;
-			case 0x9C40:
-				priv->init_pll_val = 0xC1;
-				break;
-			case 0xBB80:
-				priv->init_pll_val = 0xA1;
-				break;
-			case 0xCB20:
-				priv->init_pll_val = 0x7627091;
-				break;
-			default:
-				printk(KERN_ERR "Unknown Reference clock frequency found (0x%04x), using default\n", clk);
-				break;
-			}
-			printk(KERN_INFO "Using Reference clock frequency %d KHz (pll 0x%08x)\n", clk, 
-			       priv->init_pll_val);
+			priv->hw_refclk = cpu_to_le16(*((u16 *)ie->data));
+			pr_info("Using Reference clock frequency %d KHz\n",
+				priv->hw_refclk);
 			break;
 		}
 
@@ -829,55 +610,52 @@ int Parse_SDD_File(struct cw1200_common *priv, u8 *data, u32 length)
 	return 0;
 }
 
-char *etf_firmware = NULL;
+char *etf_firmware;
 
-#define ST90TDS_START_ADAPTER           0x09    /*  Loads Firmware and start the adapter */
-#define ST90TDS_STOP_ADAPTER            0x0A    /*  Stops the adapter */
-#define ST90TDS_CONFIG_ADAPTER          0x0E    /*  send adapter configuration params */
+#define ST90TDS_START_ADAPTER           0x09 /* Loads firmware too */
+#define ST90TDS_STOP_ADAPTER            0x0A
+#define ST90TDS_CONFIG_ADAPTER          0x0E /* Send configuration params */
 #define ST90TDS_SBUS_READ               0x13
 #define ST90TDS_SBUS_WRITE              0x14
 #define ST90TDS_GET_DEVICE_OPTION       0x19
 #define ST90TDS_SET_DEVICE_OPTION       0x1A
-#define ST90TDS_SEND_SDD                0x1D    // SDD File for DPLL
+#define ST90TDS_SEND_SDD                0x1D /* SDD File used to find DPLL */
 
 #include "fwio.h"
 
-int ETF_Request(struct cw1200_common *priv, struct etf_req_msg *msg, u32 len)
+static int etf_request(struct cw1200_common *priv,
+		       struct etf_req_msg *msg,
+		       u32 len)
 {
 	int rval = -1;
 	switch (msg->id) {
 	case ST90TDS_START_ADAPTER:
 		etf_firmware = "cw1200_etf.bin";
-		printk(KERN_INFO "ETF_START (len %d, '%s')\n", len, etf_firmware);
+		pr_info("ETF_START (len %d, '%s')\n", len, etf_firmware);
 		rval = cw1200_load_firmware(priv);
 		break;
 	case ST90TDS_STOP_ADAPTER:
-		printk(KERN_INFO "ETF_STOP (unhandled)\n");
-		// XXX handle this somehow?
+		pr_info("ETF_STOP (unhandled)\n");
 		break;
 	case ST90TDS_SEND_SDD:
-		printk(KERN_INFO "ETF_SDD\n");
-		rval = Parse_SDD_File(priv, msg->data, msg->len);
+		pr_info("ETF_SDD\n");
+		rval = parse_sdd_file(priv, msg->data, msg->len);
 		break;
 	case ST90TDS_CONFIG_ADAPTER:
-		printk(KERN_INFO "ETF_CONFIG_ADAP (unhandled)\n");
-		// XXX unhandled in ST-E code.
+		pr_info("ETF_CONFIG_ADAP (unhandled)\n");
 		break;
 	case ST90TDS_SBUS_READ:
-		printk(KERN_INFO "ETF_SBUS_READ (unhandled)\n");
-		// XXX read 32-bit value?  Not used.
+		pr_info("ETF_SBUS_READ (unhandled)\n");
 		break;
 	case ST90TDS_SBUS_WRITE:
-		printk(KERN_INFO "ETF_SBUS_WRITE (unhandled)\n");
-		// XXX write 32-bit value? Not used.
+		pr_info("ETF_SBUS_WRITE (unhandled)\n");
 		break;
 	case ST90TDS_SET_DEVICE_OPTION:
-		printk(KERN_INFO "ETF_SET_DEV_OPT (unhandled)\n");
-		// XXX not handled..
+		pr_info("ETF_SET_DEV_OPT (unhandled)\n");
 		break;
 	default:
-		printk(KERN_INFO "ETF_PASSTHRU (0x%08x)\n", msg->id);
-		rval = wsm_raw_cmd(priv, (u8*) msg, len);
+		pr_info("ETF_PASSTHRU (0x%08x)\n", msg->id);
+		rval = wsm_raw_cmd(priv, (u8 *)msg, len);
 		break;
 	}
 

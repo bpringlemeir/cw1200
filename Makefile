@@ -7,21 +7,23 @@ cw1200_core-y := \
 		bh.o \
 		wsm.o \
 		sta.o \
-		ap.o \
 		scan.o \
-		cw1200_fw_bin.o
-cw1200_core-$(CONFIG_CW1200_DEBUGFS)	+= debug.o
-cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
-#cw1200_core-$(CONFIG_CW1200_PM)		+= pm.o
+		debug.o \
+		cw1200_fw_bin.o \
+		#		pm.o \
 
-# For gas '.incbin' in cw1200_fw_bin.S with older versions.
 EXTRA_AFLAGS := -Xassembler -I$(srctree)/$(src)
+		
+cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
+
+# CFLAGS_sta.o += -DDEBUG
 
 cw1200_wlan_sdio-y := cw1200_sdio.o
 cw1200_wlan_spi-y := cw1200_spi.o
+cw1200_wlan_sagrad-y := cw1200_sagrad.o
 
 obj-$(CONFIG_CW1200) += cw1200_core.o
 obj-$(CONFIG_CW1200_WLAN_SDIO) += cw1200_wlan_sdio.o
 obj-$(CONFIG_CW1200_WLAN_SPI) += cw1200_wlan_spi.o
-
+obj-$(CONFIG_CW1200_WLAN_SAGRAD) += cw1200_wlan_sagrad.o
 

@@ -2,7 +2,7 @@
  * WSM host interface (HI) interface for ST-Ericsson CW1200 mac80211 drivers
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * Based on CW1200 UMAC WSM API, which is
  * Copyright (C) ST-Ericsson SA 2010
@@ -284,6 +284,9 @@ struct cw1200_common;
 /* Macro to fetch encryption key index. */
 #define WSM_RX_STATUS_KEY_IDX(status)	(((status >> 20)) & 0x0F)
 
+/* Indicates TSF inclusion after 802.11 frame body */
+#define WSM_RX_STATUS_TSF_INCLUDED	(BIT(24))
+
 /* Frame Control field starts at Frame offset + 2 */
 #define WSM_TX_2BYTES_SHIFT		(BIT(7))
 
@@ -316,6 +319,9 @@ struct cw1200_common;
 /* Give probe request/response higher
  * priority over the BT traffic */
 #define WSM_JOIN_FLAGS_PRIO		BIT(3)
+/* Issue immediate join confirmation and use
+ * join complete to notify about completion */
+#define WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND BIT(5)
 
 /* Key types */
 #define WSM_KEY_TYPE_WEP_DEFAULT	(0)
@@ -484,8 +490,6 @@ struct cw1200_common;
 /* 4.34 SetMagicDataFrameFilter */
 #define WSM_MIB_ID_SET_MAGIC_DATAFRAME_FILTER	0x101C
 
-/* This is the end of specification. */
-
 /* 4.35 P2PDeviceInfo */
 #define WSM_MIB_ID_P2P_DEVICE_INFO		0x101D
 
@@ -499,7 +503,7 @@ struct cw1200_common;
 #define WSM_MIB_ID_PROTECTED_MGMT_POLICY	0x1020
 
 /* 4.39 SetHtProtection */
-#define WSM_MID_ID_SET_HT_PROTECTION		0x1021
+#define WSM_MIB_ID_SET_HT_PROTECTION		0x1021
 
 /* 4.40 GPIO Command */
 #define WSM_MIB_ID_GPIO_COMMAND			0x1022
@@ -582,8 +586,7 @@ struct cw1200_common;
 #define WSM_FILTER_PORT_TYPE_DST	(0)
 #define WSM_FILTER_PORT_TYPE_SRC	(1)
 
-
-
+/* Actual header of WSM messages */
 struct wsm_hdr {
 	__le16 len;
 	__le16 id;
@@ -601,23 +604,31 @@ struct wsm_hdr {
 #define WSM_CMD_LAST_CHANCE_TIMEOUT (HZ * 3 / 2)
 
 /* ******************************************************************** */
-/* WSM capcbility							*/
+/* WSM capability							*/
 
-struct wsm_caps {
-	u16 numInpChBufs;
-	u16 sizeInpChBuf;
-	u16 hardwareId;
-	u16 hardwareSubId;
-	u16 firmwareCap;
-	u16 firmwareType;
-	u16 firmwareApiVer;
-	u16 firmwareBuildNumber;
-	u16 firmwareVersion;
-	int firmwareReady;
+#define WSM_STARTUP_IND_ID 0x0801
+
+struct wsm_startup_ind {
+	u16 input_buffers;
+	u16 input_buffer_size;
+	u16 status;
+	u16 hw_id;
+	u16 hw_subid;
+	u16 fw_cap;
+	u16 fw_type;
+	u16 fw_api;
+	u16 fw_build;
+	u16 fw_ver;
+	char fw_label[128];
+	u32 config[4];
 };
 
 /* ******************************************************************** */
 /* WSM commands								*/
+
+/* 3.1 */
+#define WSM_CONFIGURATION_REQ_ID 0x0009
+#define WSM_CONFIGURATION_RESP_ID 0x0409
 
 struct wsm_tx_power_range {
 	int min_power_level;
@@ -625,7 +636,6 @@ struct wsm_tx_power_range {
 	u32 stepping;
 };
 
-/* 3.1 */
 struct wsm_configuration {
 	/* [in] */ u32 dot11MaxTransmitMsduLifeTime;
 	/* [in] */ u32 dot11MaxReceiveLifeTime;
@@ -642,6 +652,8 @@ int wsm_configuration(struct cw1200_common *priv,
 		      struct wsm_configuration *arg);
 
 /* 3.3 */
+#define WSM_RESET_REQ_ID 0x000A
+#define WSM_RESET_RESP_ID 0x040A
 struct wsm_reset {
 	/* [in] */ int link_id;
 	/* [in] */ bool reset_statistics;
@@ -650,14 +662,21 @@ struct wsm_reset {
 int wsm_reset(struct cw1200_common *priv, const struct wsm_reset *arg);
 
 /* 3.5 */
-int wsm_read_mib(struct cw1200_common *priv, u16 mibId, void *buf,
+#define WSM_READ_MIB_REQ_ID 0x0005
+#define WSM_READ_MIB_RESP_ID 0x0405
+int wsm_read_mib(struct cw1200_common *priv, u16 mib_id, void *buf,
 		 size_t buf_size);
 
 /* 3.7 */
-int wsm_write_mib(struct cw1200_common *priv, u16 mibId, void *buf,
+#define WSM_WRITE_MIB_REQ_ID 0x0006
+#define WSM_WRITE_MIB_RESP_ID 0x0406
+int wsm_write_mib(struct cw1200_common *priv, u16 mib_id, void *buf,
 		  size_t buf_size);
 
 /* 3.9 */
+#define WSM_START_SCAN_REQ_ID 0x0007
+#define WSM_START_SCAN_RESP_ID 0x0407
+
 struct wsm_ssid {
 	u8 ssid[32];
 	u32 length;
@@ -665,12 +684,65 @@ struct wsm_ssid {
 
 struct wsm_scan_ch {
 	u16 number;
-	u32 minChannelTime;
-	u32 maxChannelTime;
-	u32 txPowerLevel;
+	u32 min_chan_time;
+	u32 max_chan_time;
+	u32 tx_power_level;
 };
 
+struct wsm_scan {
+	/* WSM_PHY_BAND_... */
+	u8 band;
+
+	/* WSM_SCAN_TYPE_... */
+	u8 type;
+
+	/* WSM_SCAN_FLAG_... */
+	u8 flags;
+
+	/* WSM_TRANSMIT_RATE_... */
+	u8 max_tx_rate;
+
+	/* Interval period in TUs that the device shall the re- */
+	/* execute the requested scan. Max value supported by the device */
+	/* is 256s. */
+	u32 auto_scan_interval;
+
+	/* Number of probe requests (per SSID) sent to one (1) */
+	/* channel. Zero (0) means that none is send, which */
+	/* means that a passive scan is to be done. Value */
+	/* greater than zero (0) means that an active scan is to */
+	/* be done. */
+	u32 num_probes;
+
+	/* Number of channels to be scanned. */
+	/* Maximum value is WSM_SCAN_MAX_NUM_OF_CHANNELS. */
+	u8 num_channels;
+
+	/* Number of SSID provided in the scan command (this */
+	/* is zero (0) in broadcast scan) */
+	/* The maximum number of SSIDs is WSM_SCAN_MAX_NUM_OF_SSIDS. */
+	u8 num_ssids;
+
+	/* The delay time (in microseconds) period */
+	/* before sending a probe-request. */
+	u8 probe_delay;
+
+	/* SSIDs to be scanned [numOfSSIDs]; */
+	struct wsm_ssid *ssids;
+
+	/* Channels to be scanned [numOfChannels]; */
+	struct wsm_scan_ch *ch;
+};
+
+int wsm_scan(struct cw1200_common *priv, const struct wsm_scan *arg);
+
+/* 3.11 */
+#define WSM_STOP_SCAN_REQ_ID 0x0008
+#define WSM_STOP_SCAN_RESP_ID 0x0408
+int wsm_stop_scan(struct cw1200_common *priv);
+
 /* 3.13 */
+#define WSM_SCAN_COMPLETE_IND_ID 0x0806
 struct wsm_scan_complete {
 	/* WSM_STATUS_... */
 	u32 status;
@@ -679,90 +751,37 @@ struct wsm_scan_complete {
 	u8 psm;
 
 	/* Number of channels that the scan operation completed. */
-	u8 numChannels;
+	u8 num_channels;
 };
-
-typedef void (*wsm_scan_complete_cb) (struct cw1200_common *priv,
-				      struct wsm_scan_complete *arg);
-
-/* 3.9 */
-struct wsm_scan {
-	/* WSM_PHY_BAND_... */
-	/* [in] */ u8 band;
-
-	/* WSM_SCAN_TYPE_... */
-	/* [in] */ u8 scanType;
-
-	/* WSM_SCAN_FLAG_... */
-	/* [in] */ u8 scanFlags;
-
-	/* WSM_TRANSMIT_RATE_... */
-	/* [in] */ u8 maxTransmitRate;
-
-	/* Interval period in TUs that the device shall the re- */
-	/* execute the requested scan. Max value supported by the device */
-	/* is 256s. */
-	/* [in] */ u32 autoScanInterval;
-
-	/* Number of probe requests (per SSID) sent to one (1) */
-	/* channel. Zero (0) means that none is send, which */
-	/* means that a passive scan is to be done. Value */
-	/* greater than zero (0) means that an active scan is to */
-	/* be done. */
-	/* [in] */ u32 numOfProbeRequests;
-
-	/* Number of channels to be scanned. */
-	/* Maximum value is WSM_SCAN_MAX_NUM_OF_CHANNELS. */
-	/* [in] */ u8 numOfChannels;
-
-	/* Number of SSID provided in the scan command (this */
-	/* is zero (0) in broadcast scan) */
-	/* The maximum number of SSIDs is WSM_SCAN_MAX_NUM_OF_SSIDS. */
-	/* [in] */ u8 numOfSSIDs;
-
-	/* The delay time (in microseconds) period */
-	/* before sending a probe-request. */
-	/* [in] */ u8 probeDelay;
-
-	/* SSIDs to be scanned [numOfSSIDs]; */
-	/* [in] */ struct wsm_ssid *ssids;
-
-	/* Channels to be scanned [numOfChannels]; */
-	/* [in] */ struct wsm_scan_ch *ch;
-};
-
-int wsm_scan(struct cw1200_common *priv, const struct wsm_scan *arg);
-
-/* 3.11 */
-int wsm_stop_scan(struct cw1200_common *priv);
 
 /* 3.14 */
+#define WSM_TX_CONFIRM_IND_ID 0x0404
+#define WSM_MULTI_TX_CONFIRM_ID 0x041E
+
 struct wsm_tx_confirm {
 	/* Packet identifier used in wsm_tx. */
-	/* [out] */ u32 packetID;
+	u32 packet_id;
 
 	/* WSM_STATUS_... */
-	/* [out] */ u32 status;
+	u32 status;
 
 	/* WSM_TRANSMIT_RATE_... */
-	/* [out] */ u8 txedRate;
+	u8 tx_rate;
 
 	/* The number of times the frame was transmitted */
 	/* without receiving an acknowledgement. */
-	/* [out] */ u8 ackFailures;
+	u8 ack_failures;
 
 	/* WSM_TX_STATUS_... */
-	/* [out] */ u16 flags;
+	u16 flags;
 
 	/* The total time in microseconds that the frame spent in */
 	/* the WLAN device before transmission as completed. */
-	/* [out] */ u32 mediaDelay;
+	u32 media_delay;
 
 	/* The total time in microseconds that the frame spent in */
 	/* the WLAN device before transmission was started. */
-	/* [out] */ u32 txQueueDelay;
-
-	/* [out]*/ u32 link_id;
+	u32 tx_queue_delay;
 };
 
 /* 3.15 */
@@ -781,71 +800,67 @@ typedef void (*wsm_tx_confirm_cb) (struct cw1200_common *priv,
  */
 struct wsm_tx {
 	/* common WSM header */
-	/* [in/wsm] */ struct wsm_hdr hdr;
+	struct wsm_hdr hdr;
 
 	/* Packet identifier that meant to be used in completion. */
-	/* [in] */ __le32 packetID;
+	__le32 packet_id;
 
 	/* WSM_TRANSMIT_RATE_... */
-	/* [in] */ u8 maxTxRate;
+	u8 max_tx_rate;
 
 	/* WSM_QUEUE_... */
-	/* [in] */ u8 queueId;
+	u8 queue_id;
 
 	/* True: another packet is pending on the host for transmission. */
-	/* [wsm] */ u8 more;
+	u8 more;
 
 	/* Bit 0 = 0 - Start expiry time from first Tx attempt (default) */
 	/* Bit 0 = 1 - Start expiry time from receipt of Tx Request */
 	/* Bits 3:1  - PTA Priority */
 	/* Bits 6:4  - Tx Rate Retry Policy */
 	/* Bit 7 - Reserved */
-	/* [in] */ u8 flags;
+	u8 flags;
 
 	/* Should be 0. */
-	/* [in] */ __le32 reserved;
+	__le32 reserved;
 
 	/* The elapsed time in TUs, after the initial transmission */
 	/* of an MSDU, after which further attempts to transmit */
 	/* the MSDU shall be terminated. Overrides the global */
 	/* dot11MaxTransmitMsduLifeTime setting [optional] */
 	/* Device will set the default value if this is 0. */
-	/* [wsm] */ __le32 expireTime;
+	__le32 expire_time;
 
 	/* WSM_HT_TX_... */
-	/* [in] */ __le32 htTxParameters;
+	__le32 ht_tx_parameters;
 };
 
 /* = sizeof(generic hi hdr) + sizeof(wsm hdr) + sizeof(alignment) */
 #define WSM_TX_EXTRA_HEADROOM (28)
 
 /* 3.16 */
+#define WSM_RECEIVE_IND_ID 0x0804
+
 struct wsm_rx {
 	/* WSM_STATUS_... */
-	/* [out] */ u32 status;
+	__le32 status;
 
 	/* Specifies the channel of the received packet. */
-	/* [out] */ u16 channelNumber;
+	__le16 channel_number;
 
 	/* WSM_TRANSMIT_RATE_... */
-	/* [out] */ u8 rxedRate;
+	u8 rx_rate;
 
 	/* This value is expressed in signed Q8.0 format for */
 	/* RSSI and unsigned Q7.1 format for RCPI. */
-	/* [out] */ u8 rcpiRssi;
+	u8 rcpi_rssi;
 
 	/* WSM_RX_STATUS_... */
-	/* [out] */ u32 flags;
+	__le32 flags;
 
-	/* An 802.11 frame. */
-	/* [out] */ void *frame;
-
-	/* Size of the frame */
-	/* [out] */ size_t frame_size;
-
-	/* Link ID */
-	/* [out] */ int link_id;
-};
+	/* Payload */
+	u8 data[0];
+} __packed;
 
 /* = sizeof(generic hi hdr) + sizeof(wsm hdr) */
 #define WSM_RX_EXTRA_HEADROOM (16)
@@ -856,13 +871,13 @@ typedef void (*wsm_rx_cb) (struct cw1200_common *priv, struct wsm_rx *arg,
 /* 3.17 */
 struct wsm_event {
 	/* WSM_STATUS_... */
-	/* [out] */ u32 eventId;
+	/* [out] */ u32 id;
 
 	/* Indication parameters. */
 	/* For error indication, this shall be a 32-bit WSM status. */
 	/* For RCPI or RSSI indication, this should be an 8-bit */
 	/* RCPI or RSSI value. */
-	/* [out] */ u32 eventData;
+	/* [out] */ u32 data;
 };
 
 struct cw1200_wsm_event {
@@ -877,74 +892,89 @@ typedef void (*wsm_event_cb) (struct cw1200_common *priv,
 			      struct wsm_event *arg);
 
 /* 3.23 */
+#define WSM_JOIN_REQ_ID 0x000B
+#define WSM_JOIN_RESP_ID 0x040B
+
 struct wsm_join {
 	/* WSM_JOIN_MODE_... */
-	/* [in] */ u8 mode;
+	u8 mode;
 
 	/* WSM_PHY_BAND_... */
-	/* [in] */ u8 band;
+	u8 band;
 
 	/* Specifies the channel number to join. The channel */
 	/* number will be mapped to an actual frequency */
 	/* according to the band */
-	/* [in] */ u16 channelNumber;
+	u16 channel_number;
 
 	/* Specifies the BSSID of the BSS or IBSS to be joined */
 	/* or the IBSS to be started. */
-	/* [in] */ u8 bssid[6];
+	u8 bssid[6];
 
 	/* ATIM window of IBSS */
 	/* When ATIM window is zero the initiated IBSS does */
 	/* not support power saving. */
-	/* [in] */ u16 atimWindow;
+	u16 atim_window;
 
 	/* WSM_JOIN_PREAMBLE_... */
-	/* [in] */ u8 preambleType;
+	u8 preamble_type;
 
 	/* Specifies if a probe request should be send with the */
 	/* specified SSID when joining to the network. */
-	/* [in] */ u8 probeForJoin;
+	u8 probe_for_join;
 
 	/* DTIM Period (In multiples of beacon interval) */
-	/* [in] */ u8 dtimPeriod;
+	u8 dtim_period;
 
 	/* WSM_JOIN_FLAGS_... */
-	/* [in] */ u8 flags;
+	u8 flags;
 
 	/* Length of the SSID */
-	/* [in] */ u32 ssidLength;
+	u32 ssid_len;
 
 	/* Specifies the SSID of the IBSS to join or start */
-	/* [in] */ u8 ssid[32];
+	u8 ssid[32];
 
 	/* Specifies the time between TBTTs in TUs */
-	/* [in] */ u32 beaconInterval;
+	u32 beacon_interval;
 
 	/* A bit mask that defines the BSS basic rate set. */
-	/* [in] */ u32 basicRateSet;
+	u32 basic_rate_set;
+};
+
+struct wsm_join_cnf {
+	u32 status;
 
 	/* Minimum transmission power level in units of 0.1dBm */
-	/* [out] */ int minPowerLevel;
+	u32 min_power_level;
 
 	/* Maximum transmission power level in units of 0.1dBm */
-	/* [out] */ int maxPowerLevel;
+	u32 max_power_level;
 };
 
 int wsm_join(struct cw1200_common *priv, struct wsm_join *arg);
 
+/* 3.24 */
+struct wsm_join_complete {
+	/* WSM_STATUS_... */
+	u32 status;
+};
+
 /* 3.25 */
+#define WSM_SET_PM_REQ_ID 0x0010
+#define WSM_SET_PM_RESP_ID 0x0410
 struct wsm_set_pm {
 	/* WSM_PSM_... */
-	/* [in] */ u8 pmMode;
+	u8 mode;
 
 	/* in unit of 500us; 0 to use default */
-	/* [in] */ u8 fastPsmIdlePeriod;
+	u8 fast_psm_idle_period;
 
 	/* in unit of 500us; 0 to use default */
-	/* [in] */ u8 apPsmChangePeriod;
+	u8 ap_psm_change_period;
 
 	/* in unit of 500us; 0 to disable auto-pspoll */
-	/* [in] */ u8 minAutoPsPollPeriod;
+	u8 min_auto_pspoll_period;
 };
 
 int wsm_set_pm(struct cw1200_common *priv, const struct wsm_set_pm *arg);
@@ -954,96 +984,101 @@ struct wsm_set_pm_complete {
 	u8 psm;			/* WSM_PSM_... */
 };
 
-typedef void (*wsm_set_pm_complete_cb) (struct cw1200_common *priv,
-					struct wsm_set_pm_complete *arg);
-
 /* 3.28 */
+#define WSM_SET_BSS_PARAMS_REQ_ID 0x0011
+#define WSM_SET_BSS_PARAMS_RESP_ID 0x0411
 struct wsm_set_bss_params {
+	/* This resets the beacon loss counters only */
+	u8 reset_beacon_loss;
+
 	/* The number of lost consecutive beacons after which */
 	/* the WLAN device should indicate the BSS-Lost event */
 	/* to the WLAN host driver. */
-	u8 beaconLostCount;
+	u8 beacon_lost_count;
 
 	/* The AID received during the association process. */
 	u16 aid;
 
 	/* The operational rate set mask */
-	u32 operationalRateSet;
+	u32 operational_rate_set;
 };
 
 int wsm_set_bss_params(struct cw1200_common *priv,
 		       const struct wsm_set_bss_params *arg);
 
 /* 3.30 */
+#define WSM_ADD_KEY_REQ_ID         0x000C
+#define WSM_ADD_KEY_RESP_ID        0x040C
 struct wsm_add_key {
 	u8 type;		/* WSM_KEY_TYPE_... */
-	u8 entryIndex;		/* Key entry index: 0 -- WSM_KEY_MAX_INDEX */
+	u8 index;		/* Key entry index: 0 -- WSM_KEY_MAX_INDEX */
 	u16 reserved;
 	union {
 		struct {
-			u8 peerAddress[6];	/* MAC address of the
+			u8 peer[6];	/* MAC address of the
 						 * peer station */
 			u8 reserved;
-			u8 keyLength;		/* Key length in bytes */
-			u8 keyData[16];		/* Key data */
-		} __packed wepPairwiseKey;
+			u8 keylen;		/* Key length in bytes */
+			u8 keydata[16];		/* Key data */
+		} __packed wep_pairwise;
 		struct {
-			u8 keyId;		/* Unique per key identifier
+			u8 keyid;		/* Unique per key identifier
 						 * (0..3) */
-			u8 keyLength;		/* Key length in bytes */
+			u8 keylen;		/* Key length in bytes */
 			u16 reserved;
-			u8 keyData[16];		/* Key data */
-		} __packed wepGroupKey;
+			u8 keydata[16];		/* Key data */
+		} __packed wep_group;
 		struct {
-			u8 peerAddress[6];	/* MAC address of the
-						 * peer station */
-			u8 reserved[2];
-			u8 tkipKeyData[16];	/* TKIP key data */
-			u8 rxMicKey[8];		/* Rx MIC key */
-			u8 txMicKey[8];		/* Tx MIC key */
-		} __packed tkipPairwiseKey;
-		struct {
-			u8 tkipKeyData[16];	/* TKIP key data */
-			u8 rxMicKey[8];		/* Rx MIC key */
-			u8 keyId;		/* Key ID */
-			u8 reserved[3];
-			u8 rxSeqCounter[8];	/* Receive Sequence Counter */
-		} __packed tkipGroupKey;
-		struct {
-			u8 peerAddress[6];	/* MAC address of the
+			u8 peer[6];	/* MAC address of the
 						 * peer station */
 			u16 reserved;
-			u8 aesKeyData[16];	/* AES key data */
-		} __packed aesPairwiseKey;
+			u8 keydata[16];	/* TKIP key data */
+			u8 rx_mic_key[8];		/* Rx MIC key */
+			u8 tx_mic_key[8];		/* Tx MIC key */
+		} __packed tkip_pairwise;
 		struct {
-			u8 aesKeyData[16];	/* AES key data */
-			u8 keyId;		/* Key ID */
+			u8 keydata[16];	/* TKIP key data */
+			u8 rx_mic_key[8];		/* Rx MIC key */
+			u8 keyid;		/* Key ID */
 			u8 reserved[3];
-			u8 rxSeqCounter[8];	/* Receive Sequence Counter */
-		} __packed aesGroupKey;
+			u8 rx_seqnum[8];	/* Receive Sequence Counter */
+		} __packed tkip_group;
 		struct {
-			u8 peerAddress[6];	/* MAC address of the
+			u8 peer[6];	/* MAC address of the
 						 * peer station */
-			u8 keyId;		/* Key ID */
+			u16 reserved;
+			u8 keydata[16];	/* AES key data */
+		} __packed aes_pairwise;
+		struct {
+			u8 keydata[16];	/* AES key data */
+			u8 keyid;		/* Key ID */
+			u8 reserved[3];
+			u8 rx_seqnum[8];	/* Receive Sequence Counter */
+		} __packed aes_group;
+		struct {
+			u8 peer[6];	/* MAC address of the
+						 * peer station */
+			u8 keyid;		/* Key ID */
 			u8 reserved;
-			u8 wapiKeyData[16];	/* WAPI key data */
-			u8 micKeyData[16];	/* MIC key data */
-		} __packed wapiPairwiseKey;
+			u8 keydata[16];	/* WAPI key data */
+			u8 mic_key[16];	/* MIC key data */
+		} __packed wapi_pairwise;
 		struct {
-			u8 wapiKeyData[16];	/* WAPI key data */
-			u8 micKeyData[16];	/* MIC key data */
-			u8 keyId;		/* Key ID */
+			u8 keydata[16];	/* WAPI key data */
+			u8 mic_key[16];	/* MIC key data */
+			u8 keyid;		/* Key ID */
 			u8 reserved[3];
-		} __packed wapiGroupKey;
+		} __packed wapi_group;
 	} __packed;
 } __packed;
 
 int wsm_add_key(struct cw1200_common *priv, const struct wsm_add_key *arg);
 
 /* 3.32 */
+#define WSM_REMOVE_KEY_REQ_ID         0x000D
+#define WSM_REMOVE_KEY_RESP_ID        0x040D
 struct wsm_remove_key {
-	/* Key entry index : 0-10 */
-	u8 entryIndex;
+	u8 index; /* Key entry index : 0-10 */
 };
 
 int wsm_remove_key(struct cw1200_common *priv,
@@ -1082,44 +1117,44 @@ int wsm_set_tx_queue_params(struct cw1200_common *priv,
 			    const struct wsm_set_tx_queue_params *arg, u8 id);
 
 /* 3.36 */
+#define WSM_EDCA_PARAMS_REQ_ID 0x0013
+#define WSM_EDCA_PARAMS_RESP_ID 0x0413
 struct wsm_edca_queue_params {
 	/* CWmin (in slots) for the access class. */
-	/* [in] */ u16 cwMin;
+	__le16 cwmin;
 
 	/* CWmax (in slots) for the access class. */
-	/* [in] */ u16 cwMax;
+	__le16 cwmax;
 
 	/* AIFS (in slots) for the access class. */
-	/* [in] */ u8 aifns;
+	__le16 aifns;
 
 	/* TX OP Limit (in microseconds) for the access class. */
-	/* [in] */ u16 txOpLimit;
+	__le16 txop_limit;
 
 	/* dot11MaxReceiveLifetime to be used for the specified */
 	/* the access class. Overrides the global */
 	/* dot11MaxReceiveLifetime value */
-	/* [in] */ u32 maxReceiveLifetime;
-
-	/* UAPSD trigger support for the access class. */
-	/* [in] */ bool uapsdEnable;
-};
+	__le32 max_rx_lifetime;
+} __packed;
 
 struct wsm_edca_params {
 	/* NOTE: index is a linux queue id. */
 	struct wsm_edca_queue_params params[4];
+	bool uapsd_enable[4];
 };
 
 #define TXOP_UNIT 32
-#define WSM_EDCA_SET(edca, queue, aifs, cw_min, cw_max, txop, life_time,\
-		uapsd)	\
+#define WSM_EDCA_SET(__edca, __queue, __aifs, __cw_min, __cw_max, __txop, __lifetime,\
+		     __uapsd) \
 	do {							\
-		struct wsm_edca_queue_params *p = &(edca)->params[queue]; \
-		p->cwMin = (cw_min);				\
-		p->cwMax = (cw_max);				\
-		p->aifns = (aifs);				\
-		p->txOpLimit = ((txop) * TXOP_UNIT);		\
-		p->maxReceiveLifetime = (life_time);		\
-		p->uapsdEnable = (uapsd);			\
+		struct wsm_edca_queue_params *p = &(__edca)->params[__queue]; \
+		p->cwmin = (__cw_min);				\
+		p->cwmax = (__cw_max);				\
+		p->aifns = (__aifs);				\
+		p->txop_limit = ((__txop) * TXOP_UNIT);		\
+		p->max_rx_lifetime = (__lifetime);		\
+		(__edca)->uapsd_enable[__queue] = (__uapsd);	\
 	} while (0)
 
 int wsm_set_edca_params(struct cw1200_common *priv,
@@ -1132,25 +1167,31 @@ int wsm_set_uapsd_param(struct cw1200_common *priv,
 /* Set-System info. Skipped for now. Irrelevent. */
 
 /* 3.40 */
+#define WSM_SWITCH_CHANNEL_REQ_ID 0x0016
+#define WSM_SWITCH_CHANNEL_RESP_ID 0x0416
+
 struct wsm_switch_channel {
 	/* 1 - means the STA shall not transmit any further */
 	/* frames until the channel switch has completed */
-	/* [in] */ u8 channelMode;
+	u8 mode;
 
 	/* Number of TBTTs until channel switch occurs. */
 	/* 0 - indicates switch shall occur at any time */
 	/* 1 - occurs immediately before the next TBTT */
-	/* [in] */ u8 channelSwitchCount;
+	u8 switch_count;
 
 	/* The new channel number to switch to. */
 	/* Note this is defined as per section 2.7. */
-	/* [in] */ u16 newChannelNumber;
+	u16 channel_number;
 };
 
 int wsm_switch_channel(struct cw1200_common *priv,
 		       const struct wsm_switch_channel *arg);
 
 typedef void (*wsm_channel_switch_cb) (struct cw1200_common *priv);
+
+#define WSM_START_REQ_ID 0x0017
+#define WSM_START_RESP_ID 0x0417
 
 struct wsm_start {
 	/* WSM_START_MODE_... */
@@ -1160,41 +1201,44 @@ struct wsm_start {
 	/* [in] */ u8 band;
 
 	/* Channel number */
-	/* [in] */ u16 channelNumber;
+	/* [in] */ u16 channel_number;
 
 	/* Client Traffic window in units of TU */
 	/* Valid only when mode == ..._P2P */
-	/* [in] */ u32 CTWindow;
+	/* [in] */ u32 ct_window;
 
 	/* Interval between two consecutive */
 	/* beacon transmissions in TU. */
-	/* [in] */ u32 beaconInterval;
+	/* [in] */ u32 beacon_interval;
 
 	/* DTIM period in terms of beacon intervals */
-	/* [in] */ u8 DTIMPeriod;
+	/* [in] */ u8 dtim_period;
 
 	/* WSM_JOIN_PREAMBLE_... */
-	/* [in] */ u8 preambleType;
+	/* [in] */ u8 preamble;
 
 	/* The delay time (in microseconds) period */
 	/* before sending a probe-request. */
-	/* [in] */ u8 probeDelay;
+	/* [in] */ u8 probe_delay;
 
 	/* Length of the SSID */
-	/* [in] */ u8 ssidLength;
+	/* [in] */ u8 ssid_len;
 
 	/* SSID of the BSS or P2P_GO to be started now. */
 	/* [in] */ u8 ssid[32];
 
 	/* The basic supported rates for the MiniAP. */
-	/* [in] */ u32 basicRateSet;
+	/* [in] */ u32 basic_rate_set;
 };
 
 int wsm_start(struct cw1200_common *priv, const struct wsm_start *arg);
 
+#define WSM_BEACON_TRANSMIT_REQ_ID 0x0018
+#define WSM_BEACON_TRANSMIT_RESP_ID 0x0418
+
 struct wsm_beacon_transmit {
 	/* 1: enable; 0: disable */
-	/* [in] */ u8 enableBeaconing;
+	/* [in] */ u8 enable_beaconing;
 };
 
 int wsm_beacon_transmit(struct cw1200_common *priv,
@@ -1244,17 +1288,6 @@ struct wsm_map_link {
 
 int wsm_map_link(struct cw1200_common *priv, const struct wsm_map_link *arg);
 
-struct wsm_cbc {
-	wsm_scan_complete_cb scan_complete;
-	wsm_tx_confirm_cb tx_confirm;
-	wsm_rx_cb rx;
-	wsm_event_cb event;
-	wsm_set_pm_complete_cb set_pm_complete;
-	wsm_channel_switch_cb channel_switch;
-	wsm_find_complete_cb find_complete;
-	wsm_suspend_resume_cb suspend_resume;
-};
-
 /* ******************************************************************** */
 /* MIB shortcats							*/
 
@@ -1299,36 +1332,36 @@ static inline int wsm_set_rcpi_rssi_threshold(struct cw1200_common *priv,
 			     sizeof(*arg));
 }
 
-struct wsm_counters_table {
-	__le32 countPlcpErrors;
-	__le32 countFcsErrors;
-	__le32 countTxPackets;
-	__le32 countRxPackets;
-	__le32 countRxPacketErrors;
-	__le32 countRxDecryptionFailures;
-	__le32 countRxMicFailures;
-	__le32 countRxNoKeyFailures;
-	__le32 countTxMulticastFrames;
-	__le32 countTxFramesSuccess;
-	__le32 countTxFrameFailures;
-	__le32 countTxFramesRetried;
-	__le32 countTxFramesMultiRetried;
-	__le32 countRxFrameDuplicates;
-	__le32 countRtsSuccess;
-	__le32 countRtsFailures;
-	__le32 countAckFailures;
-	__le32 countRxMulticastFrames;
-	__le32 countRxFramesSuccess;
-	__le32 countRxCMACICVErrors;
-	__le32 countRxCMACReplays;
-	__le32 countRxMgmtCCMPReplays;
-};
+struct wsm_mib_counters_table {
+	__le32 plcp_errors;
+	__le32 fcs_errors;
+	__le32 tx_packets;
+	__le32 rx_packets;
+	__le32 rx_packet_errors;
+	__le32 rx_decryption_failures;
+	__le32 rx_mic_failures;
+	__le32 rx_no_key_failures;
+	__le32 tx_multicast_frames;
+	__le32 tx_frames_success;
+	__le32 tx_frame_failures;
+	__le32 tx_frames_retried;
+	__le32 tx_frames_multi_retried;
+	__le32 rx_frame_duplicates;
+	__le32 rts_success;
+	__le32 rts_failures;
+	__le32 ack_failures;
+	__le32 rx_multicast_frames;
+	__le32 rx_frames_success;
+	__le32 rx_cmac_icv_errors;
+	__le32 rx_cmac_replays;
+	__le32 rx_mgmt_ccmp_replays;
+} __packed;
 
 static inline int wsm_get_counters_table(struct cw1200_common *priv,
-					 struct wsm_counters_table *arg)
+					 struct wsm_mib_counters_table *arg)
 {
 	return wsm_read_mib(priv, WSM_MIB_ID_COUNTERS_TABLE,
-			arg, sizeof(*arg));
+			    arg, sizeof(*arg));
 }
 
 static inline int wsm_get_station_id(struct cw1200_common *priv, u8 *mac)
@@ -1340,6 +1373,7 @@ struct wsm_rx_filter {
 	bool promiscuous;
 	bool bssid;
 	bool fcs;
+	bool probeResponder;
 };
 
 static inline int wsm_set_rx_filter(struct cw1200_common *priv,
@@ -1352,34 +1386,41 @@ static inline int wsm_set_rx_filter(struct cw1200_common *priv,
 		val |= __cpu_to_le32(BIT(1));
 	if (arg->fcs)
 		val |= __cpu_to_le32(BIT(2));
+	if (arg->probeResponder)
+		val |= __cpu_to_le32(BIT(3));
 	return wsm_write_mib(priv, WSM_MIB_ID_RX_FILTER, &val, sizeof(val));
 }
+
+int wsm_set_probe_responder(struct cw1200_common *priv, bool enable);
 
 #define WSM_BEACON_FILTER_IE_HAS_CHANGED	BIT(0)
 #define WSM_BEACON_FILTER_IE_NO_LONGER_PRESENT	BIT(1)
 #define WSM_BEACON_FILTER_IE_HAS_APPEARED	BIT(2)
 
 struct wsm_beacon_filter_table_entry {
-	u8	ieId;
-	u8	actionFlags;
+	u8	ie_id;
+	u8	flags;
 	u8	oui[3];
-	u8	matchData[3];
+	u8	match_data[3];
 } __packed;
 
-struct wsm_beacon_filter_table {
-	__le32 numOfIEs;
+struct wsm_mib_beacon_filter_table {
+	__le32 num;
 	struct wsm_beacon_filter_table_entry entry[10];
 } __packed;
 
 static inline int wsm_set_beacon_filter_table(struct cw1200_common *priv,
-					struct wsm_beacon_filter_table *ft)
+					      struct wsm_mib_beacon_filter_table *ft)
 {
-	size_t size = __le32_to_cpu(ft->numOfIEs) *
+	size_t size = __le32_to_cpu(ft->num) *
 		     sizeof(struct wsm_beacon_filter_table_entry) +
 		     sizeof(__le32);
 
 	return wsm_write_mib(priv, WSM_MIB_ID_BEACON_FILTER_TABLE, ft, size);
 }
+
+#define WSM_BEACON_FILTER_ENABLE	BIT(0) /* Enable/disable beacon filtering */
+#define WSM_BEACON_FILTER_AUTO_ERP	BIT(1) /* If 1 FW will handle ERP IE changes internally */
 
 struct wsm_beacon_filter_control {
 	int enabled;
@@ -1407,17 +1448,17 @@ enum wsm_power_mode {
 
 struct wsm_operational_mode {
 	enum wsm_power_mode power_mode;
-	int disableMoreFlagUsage;
-	int performAntDiversity;
+	int disable_more_flag_usage;
+	int perform_ant_diversity;
 };
 
 static inline int wsm_set_operational_mode(struct cw1200_common *priv,
 					const struct wsm_operational_mode *arg)
 {
 	u8 val = arg->power_mode;
-	if (arg->disableMoreFlagUsage)
+	if (arg->disable_more_flag_usage)
 		val |= BIT(4);
-	if (arg->performAntDiversity)
+	if (arg->perform_ant_diversity)
 		val |= BIT(5);
 	return wsm_write_mib(priv, WSM_MIB_ID_OPERATIONAL_POWER_MODE, &val,
 			     sizeof(val));
@@ -1426,7 +1467,6 @@ static inline int wsm_set_operational_mode(struct cw1200_common *priv,
 struct wsm_template_frame {
 	u8 frame_type;
 	u8 rate;
-	bool disable;
 	struct sk_buff *skb;
 };
 
@@ -1437,10 +1477,7 @@ static inline int wsm_set_template_frame(struct cw1200_common *priv,
 	u8 *p = skb_push(arg->skb, 4);
 	p[0] = arg->frame_type;
 	p[1] = arg->rate;
-	if (arg->disable)
-		((u16 *) p)[1] = 0;
-	else
-		((u16 *) p)[1] = __cpu_to_le16(arg->skb->len - 4);
+	((u16 *)p)[1] = __cpu_to_le16(arg->skb->len - 4);
 	ret = wsm_write_mib(priv, WSM_MIB_ID_TEMPLATE_FRAME, p, arg->skb->len);
 	skb_pull(arg->skb, 4);
 	return ret;
@@ -1469,107 +1506,109 @@ static inline int wsm_set_protected_mgmt_policy(struct cw1200_common *priv,
 	return ret;
 }
 
+struct wsm_mib_block_ack_policy {
+	u8 tx_tid;
+	u8 reserved1;
+	u8 rx_tid;
+	u8 reserved2;
+} __packed;
+
 static inline int wsm_set_block_ack_policy(struct cw1200_common *priv,
-					   u8 blockAckTxTidPolicy,
-					   u8 blockAckRxTidPolicy)
+					   u8 tx_tid_policy,
+					   u8 rx_tid_policy)
 {
-	struct {
-		u8 blockAckTxTidPolicy;
-		u8 reserved1;
-		u8 blockAckRxTidPolicy;
-		u8 reserved2;
-	} val = {
-		.blockAckTxTidPolicy = blockAckTxTidPolicy,
-		.blockAckRxTidPolicy = blockAckRxTidPolicy,
+	struct wsm_mib_block_ack_policy val = {
+		.tx_tid = tx_tid_policy,
+		.rx_tid = rx_tid_policy,
 	};
 	return wsm_write_mib(priv, WSM_MIB_ID_BLOCK_ACK_POLICY, &val,
 			     sizeof(val));
 }
 
-struct wsm_association_mode {
+struct wsm_mib_association_mode {
 	u8 flags;		/* WSM_ASSOCIATION_MODE_... */
-	u8 preambleType;	/* WSM_JOIN_PREAMBLE_... */
-	u8 greenfieldMode;	/* 1 for greenfield */
-	u8 mpduStartSpacing;
-	__le32 basicRateSet;
-};
+	u8 preamble;	/* WSM_JOIN_PREAMBLE_... */
+	u8 greenfield;	/* 1 for greenfield */
+	u8 mpdu_start_spacing;
+	__le32 basic_rate_set;
+} __packed;
 
 static inline int wsm_set_association_mode(struct cw1200_common *priv,
-					   struct wsm_association_mode *arg)
+					   struct wsm_mib_association_mode *arg)
 {
 	return wsm_write_mib(priv, WSM_MIB_ID_SET_ASSOCIATION_MODE, arg,
 			     sizeof(*arg));
 }
 
-struct wsm_set_tx_rate_retry_policy_header {
-	u8 numTxRatePolicies;
+#define WSM_TX_RATE_POLICY_FLAG_TERMINATE_WHEN_FINISHED BIT(2)
+#define WSM_TX_RATE_POLICY_FLAG_COUNT_INITIAL_TRANSMIT BIT(3)
+struct wsm_tx_rate_retry_policy {
+	u8 index;
+	u8 short_retries;
+	u8 long_retries;
+	/* BIT(2) - Terminate retries when Tx rate retry policy
+	 *          finishes.
+	 * BIT(3) - Count initial frame transmission as part of
+	 *          rate retry counting but not as a retry
+	 *          attempt */
+	u8 flags;
+	u8 rate_recoveries;
 	u8 reserved[3];
-} __packed;
-
-struct wsm_set_tx_rate_retry_policy_policy {
-	u8 policyIndex;
-	u8 shortRetryCount;
-	u8 longRetryCount;
-	u8 policyFlags;
-	u8 rateRecoveryCount;
-	u8 reserved[3];
-	__le32 rateCountIndices[3];
+	__le32 rate_count_indices[3];
 } __packed;
 
 struct wsm_set_tx_rate_retry_policy {
-	struct wsm_set_tx_rate_retry_policy_header hdr;
-	struct wsm_set_tx_rate_retry_policy_policy tbl[8];
+	u8 num;
+	u8 reserved[3];
+	struct wsm_tx_rate_retry_policy tbl[8];
 } __packed;
 
 static inline int wsm_set_tx_rate_retry_policy(struct cw1200_common *priv,
 				struct wsm_set_tx_rate_retry_policy *arg)
 {
-	size_t size = sizeof(struct wsm_set_tx_rate_retry_policy_header) +
-	    arg->hdr.numTxRatePolicies *
-	    sizeof(struct wsm_set_tx_rate_retry_policy_policy);
+	size_t size = 4 + arg->num * sizeof(struct wsm_tx_rate_retry_policy);
 	return wsm_write_mib(priv, WSM_MIB_ID_SET_TX_RATE_RETRY_POLICY, arg,
 			     size);
 }
 
 /* 4.32 SetEtherTypeDataFrameFilter */
 struct wsm_ether_type_filter_hdr {
-	u8 nrFilters;		/* Up to WSM_MAX_FILTER_ELEMENTS */
+	u8 num;		/* Up to WSM_MAX_FILTER_ELEMENTS */
 	u8 reserved[3];
 } __packed;
 
 struct wsm_ether_type_filter {
-	u8 filterAction;	/* WSM_FILTER_ACTION_XXX */
+	u8 action;	/* WSM_FILTER_ACTION_XXX */
 	u8 reserved;
-	__le16 etherType;	/* Type of ethernet frame */
+	__le16 type;	/* Type of ethernet frame */
 } __packed;
 
 static inline int wsm_set_ether_type_filter(struct cw1200_common *priv,
 				struct wsm_ether_type_filter_hdr *arg)
 {
 	size_t size = sizeof(struct wsm_ether_type_filter_hdr) +
-		arg->nrFilters * sizeof(struct wsm_ether_type_filter);
+		arg->num * sizeof(struct wsm_ether_type_filter);
 	return wsm_write_mib(priv, WSM_MIB_ID_SET_ETHERTYPE_DATAFRAME_FILTER,
 		arg, size);
 }
 
-
 /* 4.33 SetUDPPortDataFrameFilter */
 struct wsm_udp_port_filter_hdr {
-	u8 nrFilters;		/* Up to WSM_MAX_FILTER_ELEMENTS */
+	u8 num;		/* Up to WSM_MAX_FILTER_ELEMENTS */
 	u8 reserved[3];
 } __packed;
 
 struct wsm_udp_port_filter {
-	u8 filterAction;	/* WSM_FILTER_ACTION_XXX */
-	u8 portType;		/* WSM_FILTER_PORT_TYPE_XXX */
-	__le16 udpPort;		/* Port number */
+	u8 action;	/* WSM_FILTER_ACTION_XXX */
+	u8 type;		/* WSM_FILTER_PORT_TYPE_XXX */
+	__le16 port;		/* Port number */
 } __packed;
 
 static inline int wsm_set_udp_port_filter(struct cw1200_common *priv,
 				struct wsm_udp_port_filter_hdr *arg)
 {
 	size_t size = sizeof(struct wsm_udp_port_filter_hdr) +
-		arg->nrFilters * sizeof(struct wsm_udp_port_filter);
+		arg->num * sizeof(struct wsm_udp_port_filter);
 	return wsm_write_mib(priv, WSM_MIB_ID_SET_UDPPORT_DATAFRAME_FILTER,
 		arg, size);
 }
@@ -1609,7 +1648,7 @@ struct wsm_group_tx_seq {
 
 /* 4.39 SetHtProtection - WO */
 #define WSM_DUAL_CTS_PROT_ENB		(1 << 0)
-#define WSM_NON_GREENFIELD_STA		PRESENT(1 << 1)
+#define WSM_NON_GREENFIELD_STA_PRESENT  (1 << 1)
 #define WSM_HT_PROT_MODE__NO_PROT	(0 << 2)
 #define WSM_HT_PROT_MODE__NON_MEMBER	(1 << 2)
 #define WSM_HT_PROT_MODE__20_MHZ	(2 << 2)
@@ -1671,28 +1710,28 @@ static inline int wsm_set_bssid_filtering(struct cw1200_common *priv,
 			&arg, sizeof(arg));
 }
 
-/* Multicat filtering - 4.5 */
-struct wsm_multicast_filter {
+/* Multicast filtering - 4.5 */
+struct wsm_mib_multicast_filter {
 	__le32 enable;
-	__le32 numOfAddresses;
-	u8 macAddress[WSM_MAX_GRP_ADDRTABLE_ENTRIES][ETH_ALEN];
+	__le32 num_addrs;
+	u8 macaddrs[WSM_MAX_GRP_ADDRTABLE_ENTRIES][ETH_ALEN];
 } __packed;
 
 static inline int wsm_set_multicast_filter(struct cw1200_common *priv,
-					   struct wsm_multicast_filter *fp)
+					   struct wsm_mib_multicast_filter *fp)
 {
 	return wsm_write_mib(priv, WSM_MIB_ID_DOT11_GROUP_ADDRESSES_TABLE,
 			     fp, sizeof(*fp));
 }
 
 /* ARP IPv4 filtering - 4.10 */
-struct wsm_arp_ipv4_filter {
+struct wsm_mib_arp_ipv4_filter {
 	__le32 enable;
-	__be32 ipv4Address[WSM_MAX_ARP_IP_ADDRTABLE_ENTRIES];
+	__be32 ipv4addrs[WSM_MAX_ARP_IP_ADDRTABLE_ENTRIES];
 } __packed;
 
 static inline int wsm_set_arp_ipv4_filter(struct cw1200_common *priv,
-					  struct wsm_arp_ipv4_filter *fp)
+					  struct wsm_mib_arp_ipv4_filter *fp)
 {
 	return wsm_write_mib(priv, WSM_MIB_ID_ARP_IP_ADDRESSES_TABLE,
 			    fp, sizeof(*fp));
@@ -1737,10 +1776,10 @@ static inline int wsm_use_multi_tx_conf(struct cw1200_common *priv,
 
 /* 4.26 SetUpasdInformation */
 struct wsm_uapsd_info {
-	__le16 uapsdFlags;
-	__le16 minAutoTriggerInterval;
-	__le16 maxAutoTriggerInterval;
-	__le16 autoTriggerStep;
+	__le16 uapsd_flags;
+	__le16 min_auto_trigger_interval;
+	__le16 max_auto_trigger_interval;
+	__le16 auto_trigger_step;
 };
 
 static inline int wsm_set_uapsd_info(struct cw1200_common *priv,
@@ -1795,7 +1834,7 @@ void wsm_buf_deinit(struct wsm_buf *buf);
 /* wsm_cmd API								*/
 
 struct wsm_cmd {
-	spinlock_t lock;
+	spinlock_t lock; /* Protect structure from multiple access */
 	int done;
 	u8 *ptr;
 	size_t len;
@@ -1816,20 +1855,20 @@ void wsm_txed(struct cw1200_common *priv, u8 *data);
 /* Linux: VO VI BE BK							*/
 /* WSM:   BE BK VI VO							*/
 
-static inline u8 wsm_queue_id_to_linux(u8 queueId)
+static inline u8 wsm_queue_id_to_linux(u8 queue_id)
 {
 	static const u8 queue_mapping[] = {
 		2, 3, 1, 0
 	};
-	return queue_mapping[queueId];
+	return queue_mapping[queue_id];
 }
 
-static inline u8 wsm_queue_id_to_wsm(u8 queueId)
+static inline u8 wsm_queue_id_to_wsm(u8 queue_id)
 {
 	static const u8 queue_mapping[] = {
 		3, 2, 0, 1
 	};
-	return queue_mapping[queueId];
+	return queue_mapping[queue_id];
 }
 
 

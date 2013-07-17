@@ -2,7 +2,7 @@
  * Scan interface for ST-Ericsson CW1200 mac80211 drivers
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -40,12 +40,14 @@ struct cw1200_scan {
 };
 
 int cw1200_hw_scan(struct ieee80211_hw *hw,
-			struct ieee80211_vif *vif,
-			struct cfg80211_scan_request *req);
+		   struct ieee80211_vif *vif,
+		   struct cfg80211_scan_request *req);
 void cw1200_scan_work(struct work_struct *work);
 void cw1200_scan_timeout(struct work_struct *work);
+void cw1200_clear_recent_scan_work(struct work_struct *work);
 void cw1200_scan_complete_cb(struct cw1200_common *priv,
-				struct wsm_scan_complete *arg);
+			     struct wsm_scan_complete *arg);
+void cw1200_scan_failed_cb(struct cw1200_common *priv);
 
 /* ******************************************************************** */
 /* Raw probe requests TX workaround					*/

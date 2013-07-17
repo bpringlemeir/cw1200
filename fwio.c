@@ -2,7 +2,7 @@
  * Firmware I/O code for mac80211 ST-Ericsson CW1200 drivers
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * Based on:
  * ST-Ericsson UMAC CW1200 driver which is
@@ -13,7 +13,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-
+#include <linux/compat.h>
 #include <linux/init.h>
 #include <linux/vmalloc.h>
 #include <linux/sched.h>
@@ -28,39 +28,28 @@
 static int cw1200_get_hw_type(u32 config_reg_val, int *major_revision)
 {
 	int hw_type = -1;
-	u32 silicon_type = (config_reg_val >> 24) & 0x3;
+	u32 silicon_type = (config_reg_val >> 24) & 0x7;
 	u32 silicon_vers = (config_reg_val >> 31) & 0x1;
 
-	/* Check if we have CW1200 or STLC9000 */
-	if ((silicon_type == 0x1) || (silicon_type == 0x2)) {
+	switch (silicon_type) {
+	case 0x00:
+		*major_revision = 1;
+		hw_type = HIF_9000_SILICON_VERSATILE;
+		break;
+	case 0x01:
+	case 0x02: /* CW1x00 */
+	case 0x04: /* CW1x60 */
 		*major_revision = silicon_type;
 		if (silicon_vers)
 			hw_type = HIF_8601_VERSATILE;
 		else
 			hw_type = HIF_8601_SILICON;
-	} else {
-		*major_revision = 1;
-		hw_type = HIF_9000_SILICON_VERSTAILE;
+		break;
+	default:
+		break;
 	}
 
 	return hw_type;
-}
-
-static int config_reg_read_stlc9000(struct cw1200_common *priv,
-				    u16 reg, u32 *val)
-{
-	u16 val16;
-	int ret = cw1200_reg_read_16(priv, reg, &val16);
-	if (ret < 0)
-		return ret;
-	*val = val16;
-	return 0;
-}
-
-static int config_reg_write_stlc9000(struct cw1200_common *priv,
-				     u16 reg, u32 val)
-{
-	return cw1200_reg_write_16(priv, reg, (u16)val);
 }
 
 extern const struct firmware fw_wsm_22;
@@ -79,64 +68,59 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	/* Macroses are local. */
 #define APB_WRITE(reg, val) \
 	do { \
-		ret = cw1200_apb_write_32(priv, CW12000_APB(reg), (val)); \
-		if (ret < 0) { \
-			cw1200_dbg(CW1200_DBG_ERROR, \
-				"%s: can't write %s at line %d.\n", \
-				__func__, #reg, __LINE__); \
+		ret = cw1200_apb_write_32(priv, CW1200_APB(reg), (val)); \
+		if (ret < 0) \
 			goto error; \
-		} \
 	} while (0)
 #define APB_READ(reg, val) \
 	do { \
-		ret = cw1200_apb_read_32(priv, CW12000_APB(reg), &(val)); \
-		if (ret < 0) { \
-			cw1200_dbg(CW1200_DBG_ERROR, \
-				"%s: can't read %s at line %d.\n", \
-				__func__, #reg, __LINE__); \
+		ret = cw1200_apb_read_32(priv, CW1200_APB(reg), &(val)); \
+		if (ret < 0) \
 			goto error; \
-		} \
 	} while (0)
 #define REG_WRITE(reg, val) \
 	do { \
 		ret = cw1200_reg_write_32(priv, (reg), (val)); \
-		if (ret < 0) { \
-			cw1200_dbg(CW1200_DBG_ERROR, \
-				"%s: can't write %s at line %d.\n", \
-				__func__, #reg, __LINE__); \
+		if (ret < 0) \
 			goto error; \
-		} \
 	} while (0)
 #define REG_READ(reg, val) \
 	do { \
 		ret = cw1200_reg_read_32(priv, (reg), &(val)); \
-		if (ret < 0) { \
-			cw1200_dbg(CW1200_DBG_ERROR, \
-				"%s: can't read %s at line %d.\n", \
-				__func__, #reg, __LINE__); \
+		if (ret < 0) \
 			goto error; \
-		} \
 	} while (0)
 
 	switch (priv->hw_revision) {
 	case CW1200_HW_REV_CUT10:
 		fw_path = FIRMWARE_CUT10;
+		if (!priv->sdd_path)
+			priv->sdd_path = SDD_FILE_10;
 		break;
 	case CW1200_HW_REV_CUT11:
 		fw_path = FIRMWARE_CUT11;
+		if (!priv->sdd_path)
+			priv->sdd_path = SDD_FILE_11;
 		break;
 	case CW1200_HW_REV_CUT20:
 		fw_path = FIRMWARE_CUT20;
+		if (!priv->sdd_path)
+			priv->sdd_path = SDD_FILE_20;
 		break;
 	case CW1200_HW_REV_CUT22:
 		fw_path = FIRMWARE_CUT22;
         firmware = &fw_wsm_22;
         release = 0;
+		if (!priv->sdd_path)
+			priv->sdd_path = SDD_FILE_22;
+		break;
+	case CW1X60_HW_REV:
+		fw_path = FIRMWARE_CW1X60;
+		if (!priv->sdd_path)
+			priv->sdd_path = SDD_FILE_CW1X60;
 		break;
 	default:
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: invalid silicon revision %d.\n",
-			__func__, priv->hw_revision);
+		pr_err("Invalid silicon revision %d.\n", priv->hw_revision);
 		return -EINVAL;
 	}
 
@@ -165,22 +149,20 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 		fw_path = etf_firmware;
 #endif
 
-	/* Load a firmware file */
     if(!firmware) {
         ret = request_firmware(&firmware, fw_path, priv->pdev);
         if (ret) {
-            cw1200_dbg(CW1200_DBG_ERROR,
-                       "%s: can't load firmware file %s.\n",
+            pr_err("%s: can't load firmware file %s.\n",
                        __func__, fw_path);
             goto error;
         }
     }
-	BUG_ON(!firmware->data);
+//	BUG_ON(!firmware->data);
+
 
 	buf = kmalloc(DOWNLOAD_BLOCK_SIZE, GFP_KERNEL | GFP_DMA);
 	if (!buf) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't allocate firmware buffer.\n", __func__);
+		pr_err("Can't allocate firmware load buffer.\n");
 		ret = -ENOMEM;
 		goto error;
 	}
@@ -194,8 +176,7 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	} /* End of for loop */
 
 	if (val32 != DOWNLOAD_I_AM_HERE) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: bootloader is not ready.\n", __func__);
+		pr_err("Bootloader is not ready.\n");
 		ret = -ETIMEDOUT;
 		goto error;
 	}
@@ -208,16 +189,14 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	APB_WRITE(DOWNLOAD_IMAGE_SIZE_REG, val32);
 
 	/* Firmware downloading loop */
-	for (block = 0; block < num_blocks ; block++) {
+	for (block = 0; block < num_blocks; block++) {
 		size_t tx_size;
 		size_t block_size;
 
 		/* check the download status */
 		APB_READ(DOWNLOAD_STATUS_REG, val32);
 		if (val32 != DOWNLOAD_PENDING) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: bootloader reported error %d.\n",
-				__func__, val32);
+			pr_err("Bootloader reported error %d.\n", val32);
 			ret = -EIO;
 			goto error;
 		}
@@ -232,10 +211,9 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 		}
 
 		if ((put - get) > (DOWNLOAD_FIFO_SIZE - DOWNLOAD_BLOCK_SIZE)) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: Timeout waiting for FIFO.\n",
-				__func__);
-			return -ETIMEDOUT;
+			pr_err("Timeout waiting for FIFO.\n");
+			ret = -ETIMEDOUT;
+			goto error;
 		}
 
 		/* calculate the block size */
@@ -244,20 +222,19 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 
 		memcpy(buf, &firmware->data[put], block_size);
 		if (block_size < DOWNLOAD_BLOCK_SIZE) {
-			memset(&buf[block_size],
-				0, DOWNLOAD_BLOCK_SIZE - block_size);
+			memset(&buf[block_size], 0,
+			       DOWNLOAD_BLOCK_SIZE - block_size);
 			tx_size = DOWNLOAD_BLOCK_SIZE;
 		}
 
 		/* send the block to sram */
 		ret = cw1200_apb_write(priv,
-			CW12000_APB(DOWNLOAD_FIFO_OFFSET +
-				(put & (DOWNLOAD_FIFO_SIZE - 1))),
+			CW1200_APB(DOWNLOAD_FIFO_OFFSET +
+				   (put & (DOWNLOAD_FIFO_SIZE - 1))),
 			buf, tx_size);
 		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: can't write block at line %d.\n",
-				__func__, __LINE__);
+			pr_err("Can't write firmware block @ %d!\n",
+			       put & (DOWNLOAD_FIFO_SIZE - 1));
 			goto error;
 		}
 
@@ -274,14 +251,11 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 		mdelay(i);
 	}
 	if (val32 != DOWNLOAD_SUCCESS) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: wait for download completion failed. " \
-			"Read: 0x%.8X\n", __func__, val32);
+		pr_err("Wait for download completion failed: 0x%.8X\n", val32);
 		ret = -ETIMEDOUT;
 		goto error;
 	} else {
-		cw1200_dbg(CW1200_DBG_MSG,
-			"Firmware download completed.\n");
+		pr_info("Firmware download completed.\n");
 		ret = 0;
 	}
 
@@ -297,74 +271,93 @@ error:
 #undef REG_READ
 }
 
+
+static int config_reg_read(struct cw1200_common *priv, u32 *val)
+{
+	switch (priv->hw_type) {
+	case HIF_9000_SILICON_VERSATILE: {
+		u16 val16;
+		int ret = cw1200_reg_read_16(priv,
+					     ST90TDS_CONFIG_REG_ID,
+					     &val16);
+		if (ret < 0)
+			return ret;
+		*val = val16;
+		return 0;
+	}
+	case HIF_8601_VERSATILE:
+	case HIF_8601_SILICON:
+	default:
+		cw1200_reg_read_32(priv, ST90TDS_CONFIG_REG_ID, val);
+		break;
+	}
+	return 0;
+}
+
+static int config_reg_write(struct cw1200_common *priv, u32 val)
+{
+	switch (priv->hw_type) {
+	case HIF_9000_SILICON_VERSATILE:
+		return cw1200_reg_write_16(priv,
+					   ST90TDS_CONFIG_REG_ID,
+					   (u16)val);
+	case HIF_8601_VERSATILE:
+	case HIF_8601_SILICON:
+	default:
+		return cw1200_reg_write_32(priv, ST90TDS_CONFIG_REG_ID, val);
+		break;
+	}
+	return 0;
+}
+
 int cw1200_load_firmware(struct cw1200_common *priv)
 {
 	int ret;
 	int i;
 	u32 val32;
 	u16 val16;
-	u32 dpll = 0;
-	int major_revision;
-	int (*config_reg_read)(struct cw1200_common *priv, u16 reg, u32 *val);
-	int (*config_reg_write)(struct cw1200_common *priv, u16 reg, u32 val);
+	int major_revision = -1;
 
-	BUG_ON(!priv);
-
-	/* Read CONFIG Register Value - We will read 32 bits */
+	/* Read CONFIG Register */
 	ret = cw1200_reg_read_32(priv, ST90TDS_CONFIG_REG_ID, &val32);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't read config register.\n", __func__);
+		pr_err("Can't read config register.\n");
+		goto out;
+	}
+
+	if (val32 == 0 || val32 == 0xffffffff) {
+		pr_err("Bad config register value (0x%08x)\n", val32);
+		ret = -EIO;
 		goto out;
 	}
 
 	priv->hw_type = cw1200_get_hw_type(val32, &major_revision);
 	if (priv->hw_type < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't deduct hardware type.\n", __func__);
+		pr_err("Can't deduce hardware type.\n");
 		ret = -ENOTSUPP;
 		goto out;
 	}
 
-	dpll = priv->init_pll_val;
-
-	switch (priv->hw_type) {
-	case HIF_8601_VERSATILE:
-	case HIF_8601_SILICON:
-		config_reg_read = cw1200_reg_read_32;
-		config_reg_write = cw1200_reg_write_32;
-		break;
-	case HIF_9000_SILICON_VERSTAILE:
-		config_reg_read = config_reg_read_stlc9000;
-		config_reg_write = config_reg_write_stlc9000;
-		break;
-	default:
-		BUG_ON(1);
-	}
-
-	ret = cw1200_reg_write_32(priv, ST90TDS_TSET_GEN_R_W_REG_ID, dpll);
+	/* Set DPLL Reg value, and read back to confirm writes work */
+	ret = cw1200_reg_write_32(priv, ST90TDS_TSET_GEN_R_W_REG_ID,
+				  cw1200_dpll_from_clk(priv->hw_refclk));
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't write DPLL register.\n", __func__);
+		pr_err("Can't write DPLL register.\n");
 		goto out;
 	}
 
 	msleep(20);
 
-	/* Read DPLL Reg value and compare with value written */
 	ret = cw1200_reg_read_32(priv,
 		ST90TDS_TSET_GEN_R_W_REG_ID, &val32);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't read DPLL register.\n", __func__);
+		pr_err("Can't read DPLL register.\n");
 		goto out;
 	}
 
-	if (val32 != dpll) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: unable to initialise " \
-			"DPLL register. Wrote 0x%.8X, read 0x%.8X.\n",
-			__func__, dpll, val32);
+	if (val32 != cw1200_dpll_from_clk(priv->hw_refclk)) {
+		pr_err("Unable to initialise DPLL register. Wrote 0x%.8X, Read 0x%.8X.\n",
+		       cw1200_dpll_from_clk(priv->hw_refclk), val32);
 		ret = -EIO;
 		goto out;
 	}
@@ -372,235 +365,174 @@ int cw1200_load_firmware(struct cw1200_common *priv)
 	/* Set wakeup bit in device */
 	ret = cw1200_reg_read_16(priv, ST90TDS_CONTROL_REG_ID, &val16);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: set_wakeup: can't read " \
-			"control register.\n", __func__);
+		pr_err("set_wakeup: can't read control register.\n");
 		goto out;
 	}
 
 	ret = cw1200_reg_write_16(priv, ST90TDS_CONTROL_REG_ID,
 		val16 | ST90TDS_CONT_WUP_BIT);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: set_wakeup: can't write " \
-			"control register.\n", __func__);
+		pr_err("set_wakeup: can't write control register.\n");
 		goto out;
 	}
 
 	/* Wait for wakeup */
-	for (i = 0 ; i < 300 ; i += 1 + i / 2) {
+	for (i = 0; i < 300; i += (1 + i / 2)) {
 		ret = cw1200_reg_read_16(priv,
 			ST90TDS_CONTROL_REG_ID, &val16);
 		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: wait_for_wakeup: can't read " \
-				"control register.\n", __func__);
+			pr_err("wait_for_wakeup: can't read control register.\n");
 			goto out;
 		}
 
-		if (val16 & ST90TDS_CONT_RDY_BIT) {
-			cw1200_dbg(CW1200_DBG_MSG,
-				"WLAN device is ready.\n");
+		if (val16 & ST90TDS_CONT_RDY_BIT)
 			break;
-		}
+
 		msleep(i);
 	}
 
 	if ((val16 & ST90TDS_CONT_RDY_BIT) == 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: wait_for_wakeup: device is not responding.\n",
-			__func__);
+		pr_err("wait_for_wakeup: device is not responding.\n");
 		ret = -ETIMEDOUT;
 		goto out;
 	}
 
-	if (major_revision == 1) {
+	switch (major_revision) {
+	case 1:
 		/* CW1200 Hardware detection logic : Check for CUT1.1 */
 		ret = cw1200_ahb_read_32(priv, CW1200_CUT_ID_ADDR, &val32);
 		if (ret) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: HW detection: can't read CUT ID.\n",
-				__func__);
+			pr_err("HW detection: can't read CUT ID.\n");
 			goto out;
 		}
 
 		switch (val32) {
 		case CW1200_CUT_11_ID_STR:
-			cw1200_dbg(CW1200_DBG_MSG,
-				   "Cut 1.1 silicon is detected.\n");
+			pr_info("CW1x00 Cut 1.1 silicon detected.\n");
 			priv->hw_revision = CW1200_HW_REV_CUT11;
 			break;
 		default:
-			cw1200_dbg(CW1200_DBG_MSG,
-				   "Cut 1.0 silicon is detected.\n");
+			pr_info("CW1x00 Cut 1.0 silicon detected.\n");
 			priv->hw_revision = CW1200_HW_REV_CUT10;
 			break;
 		}
-	} else if (major_revision == 2) {
-		u32 ar1, ar2, ar3;
-		cw1200_dbg(CW1200_DBG_MSG, "Cut 2.x silicon is detected.\n");
 
+		/* According to ST-E, CUT<2.0 has busted BA TID0-3.
+		   Just disable it entirely...
+		*/
+		priv->ba_rx_tid_mask = 0;
+		priv->ba_tx_tid_mask = 0;
+		break;
+	case 2: {
+		u32 ar1, ar2, ar3;
 		ret = cw1200_ahb_read_32(priv, CW1200_CUT2_ID_ADDR, &ar1);
 		if (ret) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: (1) HW detection: can't read CUT ID.\n",
-				__func__);
+			pr_err("(1) HW detection: can't read CUT ID\n");
 			goto out;
 		}
 		ret = cw1200_ahb_read_32(priv, CW1200_CUT2_ID_ADDR + 4, &ar2);
 		if (ret) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: (2) HW detection: can't read CUT ID.\n",
-				__func__);
+			pr_err("(2) HW detection: can't read CUT ID.\n");
 			goto out;
 		}
 
 		ret = cw1200_ahb_read_32(priv, CW1200_CUT2_ID_ADDR + 8, &ar3);
 		if (ret) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: (3) HW detection: can't read CUT ID.\n",
-				__func__);
+			pr_err("(3) HW detection: can't read CUT ID.\n");
 			goto out;
 		}
 
 		if (ar1 == CW1200_CUT_22_ID_STR1 &&
 		    ar2 == CW1200_CUT_22_ID_STR2 &&
 		    ar3 == CW1200_CUT_22_ID_STR3) {
-			cw1200_dbg(CW1200_DBG_MSG, "Cut 2.2 detected.\n");
+			pr_info("CW1x00 Cut 2.2 silicon detected.\n");
 			priv->hw_revision = CW1200_HW_REV_CUT22;
 		} else {
-			cw1200_dbg(CW1200_DBG_MSG, "Cut 2.0 detected.\n");
+			pr_info("CW1x00 Cut 2.0 silicon detected.\n");
 			priv->hw_revision = CW1200_HW_REV_CUT20;
 		}
-	} else {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: unsupported silicon major revision %d.\n",
-			__func__, major_revision);
+		break;
+	}
+	case 4:
+		pr_info("CW1x60 silicon detected.\n");
+		priv->hw_revision = CW1X60_HW_REV;
+		break;
+	default:
+		pr_err("Unsupported silicon major revision %d.\n",
+		       major_revision);
 		ret = -ENOTSUPP;
 		goto out;
 	}
 
 	/* Checking for access mode */
-	ret = config_reg_read(priv, ST90TDS_CONFIG_REG_ID, &val32);
+	ret = config_reg_read(priv, &val32);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: check_access_mode: can't read " \
-			"config register.\n", __func__);
+		pr_err("Can't read config register.\n");
 		goto out;
 	}
 
-	if (val32 & ST90TDS_CONFIG_ACCESS_MODE_BIT) {
-		switch (priv->hw_type)  {
-		case HIF_8601_SILICON:
-			cw1200_dbg(CW1200_DBG_MSG,
-				"%s: CW1200 detected.\n", __func__);
-			ret = cw1200_load_firmware_cw1200(priv);
-			break;
-		case HIF_8601_VERSATILE:
-			/* TODO: Not implemented yet!
-			ret = cw1200_load_firmware_cw1100(priv);
-			*/
-			ret = -ENOTSUPP;
+	if (!(val32 & ST90TDS_CONFIG_ACCESS_MODE_BIT)) {
+		pr_err("Device is already in QUEUE mode!\n");
+			ret = -EINVAL;
 			goto out;
-		case HIF_9000_SILICON_VERSTAILE:
-			/* TODO: Not implemented yet!
-			ret = cw1200_load_firmware_stlc9000(priv);
-			*/
-			ret = -ENOTSUPP;
-			goto out;
-		default:
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: Unknown hardware: %d.\n",
-				__func__, priv->hw_type);
-		}
-		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: can't download firmware.\n", __func__);
-			goto out;
-		}
-	} else {
-		cw1200_dbg(CW1200_DBG_MSG,
-			"%s: check_access_mode: device is already " \
-			"in QUEUE mode.\n", __func__);
-		/* TODO: verify this branch. Do we need something to do? */
 	}
 
-	/* Register Interrupt Handler */
-	ret = priv->sbus_ops->irq_subscribe(priv->sbus_priv,
-		(sbus_irq_handler)cw1200_irq_handler, priv);
+	switch (priv->hw_type)  {
+	case HIF_8601_SILICON:
+		if (priv->hw_revision == CW1X60_HW_REV) {
+			pr_err("Can't handle CW1160/1260 firmware load yet.\n");
+			ret = -ENOTSUPP;
+			goto out;
+		}
+		ret = cw1200_load_firmware_cw1200(priv);
+		break;
+	default:
+		pr_err("Can't perform firmware load for hw type %d.\n",
+		       priv->hw_type);
+		ret = -ENOTSUPP;
+		goto out;
+	}
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: can't register IRQ handler.\n", __func__);
+		pr_err("Firmware load error.\n");
 		goto out;
 	}
 
-	if (HIF_8601_SILICON  == priv->hw_type) {
-		/* If device is CW1200 the IRQ enable/disable bits
-		 * are in CONFIG register */
-		ret = config_reg_read(priv, ST90TDS_CONFIG_REG_ID, &val32);
-		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: enable_irq: can't read " \
-				"config register.\n", __func__);
-			goto unsubscribe;
-		}
-		ret = config_reg_write(priv, ST90TDS_CONFIG_REG_ID,
-			val32 | ST90TDS_CONF_IRQ_RDY_ENABLE);
-		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: enable_irq: can't write " \
-				"config register.\n", __func__);
-			goto unsubscribe;
-		}
-	} else {
-		/* If device is STLC9000 the IRQ enable/disable bits
-		 * are in CONTROL register */
-		/* Enable device interrupts - Both DATA_RDY and WLAN_RDY */
-		ret = cw1200_reg_read_16(priv, ST90TDS_CONFIG_REG_ID, &val16);
-		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: enable_irq: can't read " \
-				"control register.\n", __func__);
-			goto unsubscribe;
-		}
-		ret = cw1200_reg_write_16(priv, ST90TDS_CONFIG_REG_ID,
-			val16 | ST90TDS_CONT_IRQ_RDY_ENABLE);
-		if (ret < 0) {
-			cw1200_dbg(CW1200_DBG_ERROR,
-				"%s: enable_irq: can't write " \
-				"control register.\n", __func__);
-			goto unsubscribe;
-		}
-
-	}
+	/* Enable interrupt signalling */
+	priv->sbus_ops->lock(priv->sbus_priv);
+	ret = __cw1200_irq_enable(priv, 1);
+	priv->sbus_ops->unlock(priv->sbus_priv);
+	if (ret < 0)
+		goto unsubscribe;
 
 	/* Configure device for MESSSAGE MODE */
-	ret = config_reg_read(priv, ST90TDS_CONFIG_REG_ID, &val32);
+	ret = config_reg_read(priv, &val32);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: set_mode: can't read config register.\n",
-			__func__);
+		pr_err("Can't read config register.\n");
 		goto unsubscribe;
 	}
-	ret = config_reg_write(priv, ST90TDS_CONFIG_REG_ID,
-		val32 & ~ST90TDS_CONFIG_ACCESS_MODE_BIT);
+	ret = config_reg_write(priv, val32 & ~ST90TDS_CONFIG_ACCESS_MODE_BIT);
 	if (ret < 0) {
-		cw1200_dbg(CW1200_DBG_ERROR,
-			"%s: set_mode: can't write config register.\n",
-			__func__);
+		pr_err("Can't write config register.\n");
 		goto unsubscribe;
 	}
 
 	/* Unless we read the CONFIG Register we are
-	 * not able to get an interrupt */
-	mdelay(10);
-	config_reg_read(priv, ST90TDS_CONFIG_REG_ID, &val32);
+	 * not able to get an interrupt
+	 */
+	printk(KERN_CRIT"VLAD: %s 1\n",__func__);
+// VLAD:
+//	mdelay(10);
+	mdelay(100);
+	config_reg_read(priv, &val32);
 
 out:
+    printk(KERN_CRIT"VLAD: %s 2\n",__func__);
 	return ret;
 
 unsubscribe:
-	priv->sbus_ops->irq_unsubscribe(priv->sbus_priv);
+	/* Disable interrupt signalling */
+	priv->sbus_ops->lock(priv->sbus_priv);
+	ret = __cw1200_irq_enable(priv, 0);
+	priv->sbus_ops->unlock(priv->sbus_priv);
 	return ret;
 }
-

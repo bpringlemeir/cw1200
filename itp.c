@@ -3,7 +3,7 @@
  * ITP code
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -50,7 +50,7 @@ static ssize_t cw1200_itp_read(struct file *file,
 	ret = copy_to_user(user_buf, skb->data, skb->len);
 	*ppos += skb->len;
 	skb->data[skb->len] = 0;
-	itp_printk(KERN_DEBUG "[ITP] >>> %s", skb->data);
+	pr_debug("[ITP] >>> %s", skb->data);
 	consume_skb(skb);
 
 	return skb->len - ret;
@@ -205,7 +205,7 @@ int cw1200_itp_init(struct cw1200_common *priv)
 			sizeof(struct ieee80211_hdr_3addr);
 
 	if (!debugfs_create_file("itp", S_IRUSR | S_IWUSR,
-			priv->debug->debugfs_phy, priv, &fops_itp))
+				 priv->debug->debugfs_phy, priv, &fops_itp))
 		return -ENOMEM;
 
 	return 0;
@@ -216,7 +216,7 @@ void cw1200_itp_release(struct cw1200_common *priv)
 	struct cw1200_itp *itp = &priv->debug->itp;
 
 	wait_event_interruptible(itp->close_wait,
-			!atomic_read(&itp->open_count));
+				 !atomic_read(&itp->open_count));
 
 	WARN_ON(atomic_read(&itp->open_count));
 
@@ -234,8 +234,7 @@ static int __cw1200_itp_open(struct cw1200_common *priv)
 		return -EINVAL;
 	itp->saved_channel = priv->channel;
 	if (!priv->channel)
-		priv->channel = &priv->hw->
-			wiphy->bands[IEEE80211_BAND_2GHZ]->channels[0];
+		priv->channel = &priv->hw->wiphy->bands[IEEE80211_BAND_2GHZ]->channels[0];
 	wsm_set_bssid_filtering(priv, false);
 	cw1200_itp_rx_reset(priv);
 	return 0;
@@ -272,8 +271,8 @@ static void cw1200_itp_rx_start(struct cw1200_common *priv)
 {
 	struct cw1200_itp *itp = &priv->debug->itp;
 
-	itp_printk(KERN_DEBUG "[ITP] RX start, band = %d, ch = %d\n",
-			itp->band, itp->ch);
+	pr_debug("[ITP] RX start, band = %d, ch = %d\n",
+		 itp->band, itp->ch);
 	atomic_set(&itp->test_mode, TEST_MODE_RX_TEST);
 	cw1200_update_listening(priv, false);
 	priv->channel = &priv->hw->
@@ -285,7 +284,7 @@ static void cw1200_itp_rx_start(struct cw1200_common *priv)
 static void cw1200_itp_rx_stop(struct cw1200_common *priv)
 {
 	struct cw1200_itp *itp = &priv->debug->itp;
-	itp_printk(KERN_DEBUG "[ITP] RX stop\n");
+	pr_debug("[ITP] RX stop\n");
 	atomic_set(&itp->test_mode, TEST_MODE_NO_TEST);
 	cw1200_itp_rx_reset(priv);
 }
@@ -296,7 +295,7 @@ static void cw1200_itp_rx_stats(struct cw1200_common *priv)
 	struct sk_buff *skb;
 	char buf[128];
 	int len, ret;
-	struct wsm_counters_table counters;
+	struct wsm_mib_counters_table counters;
 
 	ret = wsm_get_counters_table(priv, &counters);
 
@@ -305,13 +304,13 @@ static void cw1200_itp_rx_stats(struct cw1200_common *priv)
 
 	if (!itp->rx_cnt)
 		len = snprintf(buf, sizeof(buf), "1,0,0,0,0,%d\n",
-				counters.countRxPacketErrors);
+			       counters.rx_packet_errors);
 	else
 		len = snprintf(buf, sizeof(buf), "1,%d,%ld,%d,%d,%d\n",
-			itp->rx_cnt,
-			itp->rx_cnt ? itp->rx_rssi / itp->rx_cnt : 0,
-			itp->rx_rssi_min, itp->rx_rssi_max,
-			counters.countRxPacketErrors);
+			       itp->rx_cnt,
+			       itp->rx_cnt ? itp->rx_rssi / itp->rx_cnt : 0,
+			       itp->rx_rssi_min, itp->rx_rssi_max,
+			       counters.rx_packet_errors);
 
 	if (len <= 0) {
 		cw1200_itp_err(priv, -EBUSY, 21);
@@ -342,9 +341,9 @@ static void cw1200_itp_tx_start(struct cw1200_common *priv)
 	struct wsm_tx *tx;
 	struct ieee80211_hdr_3addr *hdr;
 	struct cw1200_itp *itp = &priv->debug->itp;
-	struct wsm_association_mode assoc_mode = {
+	struct wsm_mib_association_mode assoc_mode = {
 		.flags = WSM_ASSOCIATION_MODE_USE_PREAMBLE_TYPE,
-		.preambleType = itp->preamble,
+		.preamble = itp->preamble,
 	};
 	int len;
 	u8 da_addr[6] = ITP_DEFAULT_DA_ADDR;
@@ -353,12 +352,10 @@ static void cw1200_itp_tx_start(struct cw1200_common *priv)
 	if (itp->rate > 3)
 		itp->rate += 2;
 
-	itp_printk(KERN_DEBUG "[ITP] TX start: band = %d, ch = %d, rate = %d,"
-			" preamble = %d, number = %d, data_mode = %d,"
-			" interval = %d, power = %d, data_len = %d\n",
-			itp->band, itp->ch, itp->rate, itp->preamble,
-			itp->number, itp->data_mode, itp->interval_us,
-			itp->power, itp->data_len);
+	pr_debug("[ITP] TX start: band = %d, ch = %d, rate = %d, preamble = %d, number = %d, data_mode = %d, interval = %d, power = %d, data_len = %d\n",
+		 itp->band, itp->ch, itp->rate, itp->preamble,
+		 itp->number, itp->data_mode, itp->interval_us,
+		 itp->power, itp->data_len);
 
 	len = itp->hdr_len + itp->data_len;
 
@@ -366,38 +363,36 @@ static void cw1200_itp_tx_start(struct cw1200_common *priv)
 	tx = (struct wsm_tx *)itp->data;
 	tx->hdr.len = itp->data_len + itp->hdr_len;
 	tx->hdr.id = __cpu_to_le16(0x0004 | 1 << 6);
-	tx->maxTxRate = itp->rate;
-	tx->queueId = 3;
+	tx->max_tx_rate = itp->rate;
+	tx->queue_id = 3;
 	tx->more = 0;
 	tx->flags = 0xc;
-	tx->packetID = 0x55ff55;
+	tx->packet_id = 0x55ff55;
 	tx->reserved = 0;
-	tx->expireTime = 1;
+	tx->expire_time = 1;
 
 	if (itp->preamble == ITP_PREAMBLE_GREENFIELD)
-		tx->htTxParameters = WSM_HT_TX_GREENFIELD;
+		tx->ht_tx_parameters = WSM_HT_TX_GREENFIELD;
 	else if (itp->preamble == ITP_PREAMBLE_MIXED)
-		tx->htTxParameters = WSM_HT_TX_MIXED;
+		tx->ht_tx_parameters = WSM_HT_TX_MIXED;
 
 	hdr = (struct ieee80211_hdr_3addr *)&itp->data[sizeof(struct wsm_tx)];
 	memset(hdr, 0, sizeof(*hdr));
-	hdr->frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA |
-			IEEE80211_FCTL_TODS);
+	hdr->frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA |	IEEE80211_FCTL_TODS);
 	memcpy(hdr->addr1, da_addr, ETH_ALEN);
 	memcpy(hdr->addr2, priv->vif->addr, ETH_ALEN);
 	memcpy(hdr->addr3, da_addr, ETH_ALEN);
 
 	cw1200_itp_fill_pattern(&itp->data[itp->hdr_len],
-			itp->data_len, itp->data_mode);
+				itp->data_len, itp->data_mode);
 
 	cw1200_update_listening(priv, false);
-	priv->channel = &priv->hw->
-		wiphy->bands[itp->band]->channels[itp->ch];
+	priv->channel = &priv->hw->wiphy->bands[itp->band]->channels[itp->ch];
 	WARN_ON(wsm_set_output_power(priv, itp->power));
 	if (itp->preamble == ITP_PREAMBLE_SHORT ||
-			itp->preamble == ITP_PREAMBLE_LONG)
+	    itp->preamble == ITP_PREAMBLE_LONG)
 		WARN_ON(wsm_set_association_mode(priv,
-					&assoc_mode));
+						 &assoc_mode));
 	wsm_set_bssid_filtering(priv, false);
 	cw1200_update_listening(priv, true);
 
@@ -424,7 +419,7 @@ void __cw1200_itp_tx_stop(struct cw1200_common *priv)
 static void cw1200_itp_tx_stop(struct cw1200_common *priv)
 {
 	struct cw1200_itp *itp = &priv->debug->itp;
-	itp_printk(KERN_DEBUG "[ITP] TX stop\n");
+	pr_debug("[ITP] TX stop\n");
 	atomic_set(&itp->stop_tx, 1);
 	flush_workqueue(priv->workqueue);
 
@@ -432,6 +427,15 @@ static void cw1200_itp_tx_stop(struct cw1200_common *priv)
 	msleep(500);
 
 	__cw1200_itp_tx_stop(priv);
+}
+
+static int cw1200_print_fw_version(struct cw1200_common *priv,
+				   u8 *buf, size_t len)
+{
+	return snprintf(buf, len, "%s %d.%d",
+			cw1200_fw_types[priv->wsm_caps.fw_type],
+			priv->wsm_caps.fw_ver,
+			priv->wsm_caps.fw_build);
 }
 
 static void cw1200_itp_get_version(struct cw1200_common *priv,
@@ -442,8 +446,8 @@ static void cw1200_itp_get_version(struct cw1200_common *priv,
 	char buf[ITP_BUF_SIZE];
 	size_t size = 0;
 	int len;
-	itp_printk(KERN_DEBUG "[ITP] print %s version\n", type == ITP_CHIP_ID ?
-			"chip" : "firmware");
+	pr_debug("[ITP] print %s version\n",
+		 type == ITP_CHIP_ID ? "chip" : "firmware");
 
 	len = snprintf(buf, ITP_BUF_SIZE, "2,");
 	if (len <= 0) {
@@ -465,8 +469,8 @@ static void cw1200_itp_get_version(struct cw1200_common *priv,
 		break;
 	case ITP_FW_VER:
 		len = snprintf(buf+size, ITP_BUF_SIZE - size,
-				"%d.%d", priv->wsm_caps.hardwareId,
-				priv->wsm_caps.hardwareSubId);
+				"%d.%d", priv->wsm_caps.hw_id,
+				priv->wsm_caps.hw_subid);
 		if (len <= 0) {
 			cw1200_itp_err(priv, -EINVAL, 42);
 			return;
@@ -523,8 +527,7 @@ int cw1200_itp_get_tx(struct cw1200_common *priv, u8 **data,
 
 	if (itp->number == 0) {
 		atomic_set(&itp->stop_tx, 1);
-		queue_delayed_work(priv->workqueue, &itp->tx_finish,
-				HZ/10);
+		queue_delayed_work(priv->workqueue, &itp->tx_finish, HZ/10);
 		goto out;
 	}
 
@@ -533,20 +536,19 @@ int cw1200_itp_get_tx(struct cw1200_common *priv, u8 **data,
 
 	if (priv->hw_bufs_used >= 2) {
 		if (!atomic_read(&priv->bh_rx))
-				atomic_set(&priv->bh_rx, 1);
+			atomic_set(&priv->bh_rx, 1);
 		atomic_set(&priv->bh_tx, 1);
 		goto out;
 	}
 
 	ktime_get_ts(&now);
-	time_left_us = (itp->last_sent.tv_sec -
-			now.tv_sec)*1000000 +
-		(itp->last_sent.tv_nsec - now.tv_nsec)/1000
-		+ itp->interval_us;
+	time_left_us = (itp->last_sent.tv_sec -	now.tv_sec)*1000000 +
+		(itp->last_sent.tv_nsec - now.tv_nsec)/1000 +
+		itp->interval_us;
 
 	if (time_left_us > ITP_TIME_THRES_US) {
 		queue_delayed_work(priv->workqueue, &itp->tx_work,
-				ITP_US_TO_MS(time_left_us)*HZ/1000);
+				   ITP_US_TO_MS(time_left_us)*HZ/1000);
 		goto out;
 	}
 
@@ -561,7 +563,7 @@ int cw1200_itp_get_tx(struct cw1200_common *priv, u8 **data,
 
 	if (itp->data_mode == ITP_DATA_RANDOM)
 		cw1200_itp_fill_pattern(&itp->data[itp->hdr_len],
-				itp->data_len, itp->data_mode);
+					itp->data_len, itp->data_mode);
 	*burst = 2;
 	atomic_set(&priv->bh_tx, 1);
 	ktime_get_ts(&itp->last_sent);
@@ -604,8 +606,8 @@ void cw1200_itp_wake_up_tx(struct cw1200_common *priv)
 bool cw1200_itp_tx_running(struct cw1200_common *priv)
 {
 	if (atomic_read(&priv->debug->itp.awaiting_confirm) ||
-			atomic_read(&priv->debug->itp.test_mode) ==
-			TEST_MODE_TX_TEST) {
+	    atomic_read(&priv->debug->itp.test_mode) ==
+	    TEST_MODE_TX_TEST) {
 		atomic_sub(1, &priv->debug->itp.awaiting_confirm);
 		return true;
 	}
@@ -620,7 +622,7 @@ static void cw1200_itp_handle(struct cw1200_common *priv,
 	int cmd;
 	int ret;
 
-	itp_printk(KERN_DEBUG "[ITP] <<< %s", skb->data);
+	pr_debug("[ITP] <<< %s", skb->data);
 	if (sscanf(skb->data, "%d", &cmd) != 1) {
 		cw1200_itp_err(priv, -EINVAL, 1);
 		return;
@@ -638,14 +640,13 @@ static void cw1200_itp_handle(struct cw1200_common *priv,
 			cw1200_itp_err(priv, -EINVAL, ret + 1);
 			return;
 		}
-		if (itp->band >= 2)
+		if (itp->band >= 2) {
 			cw1200_itp_err(priv, -EINVAL, 2);
-		else if (!wiphy->bands[itp->band])
+		} else if (!wiphy->bands[itp->band]) {
 			cw1200_itp_err(priv, -EINVAL, 2);
-		else if (itp->ch >=
-				wiphy->bands[itp->band]->n_channels)
+		} else if (itp->ch >= wiphy->bands[itp->band]->n_channels) {
 			cw1200_itp_err(priv, -EINVAL, 3);
-		else {
+		} else {
 			cw1200_itp_rx_stats(priv);
 			cw1200_itp_rx_start(priv);
 		}
@@ -659,8 +660,9 @@ static void cw1200_itp_handle(struct cw1200_common *priv,
 			cw1200_itp_rx_stop(priv);
 		} else if (atomic_read(&itp->test_mode) == TEST_MODE_TX_TEST) {
 			cw1200_itp_tx_stop(priv);
-		} else
+		} else {
 			cw1200_itp_err(priv, -EBUSY, 0);
+		}
 		break;
 	case 4: /* TX start */
 		if (atomic_read(&itp->test_mode) != TEST_MODE_NO_TEST) {
@@ -675,24 +677,22 @@ static void cw1200_itp_handle(struct cw1200_common *priv,
 			cw1200_itp_err(priv, -EINVAL, ret + 1);
 			return;
 		}
-		if (itp->band >= 2)
+		if (itp->band >= 2) {
 			cw1200_itp_err(priv, -EINVAL, 2);
-		else if (!wiphy->bands[itp->band])
+		} else if (!wiphy->bands[itp->band]) {
 			cw1200_itp_err(priv, -EINVAL, 2);
-		else if (itp->ch >=
-				wiphy->bands[itp->band]->n_channels)
+		} else if (itp->ch >= wiphy->bands[itp->band]->n_channels) {
 			cw1200_itp_err(priv, -EINVAL, 3);
-		else if (itp->rate >= 20)
+		} else if (itp->rate >= 20) {
 			cw1200_itp_err(priv, -EINVAL, 4);
-		else if (itp->preamble >= ITP_PREAMBLE_MAX)
+		} else if (itp->preamble >= ITP_PREAMBLE_MAX) {
 			cw1200_itp_err(priv, -EINVAL, 5);
-		else if (itp->data_mode >= ITP_DATA_MAX_MODE)
+		} else if (itp->data_mode >= ITP_DATA_MAX_MODE) {
 			cw1200_itp_err(priv, -EINVAL, 7);
-		else if (itp->data_len < ITP_MIN_DATA_SIZE ||
-				itp->data_len > priv->wsm_caps.sizeInpChBuf -
-				itp->hdr_len)
+		} else if (itp->data_len < ITP_MIN_DATA_SIZE ||
+			   itp->data_len > (priv->wsm_caps.input_buffer_size - itp->hdr_len)) {
 			cw1200_itp_err(priv, -EINVAL, 8);
-		else {
+		} else {
 		    cw1200_itp_tx_start(priv);
 		}
 		break;
@@ -702,7 +702,6 @@ static void cw1200_itp_handle(struct cw1200_common *priv,
 	case 6:
 		cw1200_itp_get_version(priv, ITP_FW_VER);
 		break;
-
 	}
 }
 
@@ -734,6 +733,6 @@ static void cw1200_itp_err(struct cw1200_common *priv,
 			(unsigned long)__builtin_return_address(0));
 	if (len <= 0)
 		return;
-	itp_printk(KERN_DEBUG "[ITP] error %d,%d from %s\n",
-			err, arg, buf);
+	pr_debug("[ITP] error %d,%d from %s\n",
+		 err, arg, buf);
 }

@@ -2,7 +2,7 @@
  * Common sbus abstraction layer interface for cw1200 wireless driver
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -18,7 +18,10 @@
  */
 struct sbus_priv;
 
-typedef void (*sbus_irq_handler)(void *priv);
+void cw1200_irq_handler(struct cw1200_common *priv);
+
+/* This MUST be wrapped with sbus_ops->lock/unlock! */
+int __cw1200_irq_enable(struct cw1200_common *priv, int enable);
 
 struct sbus_ops {
 	int (*sbus_memcpy_fromio)(struct sbus_priv *self, unsigned int addr,
@@ -27,15 +30,9 @@ struct sbus_ops {
 					const void *src, int count);
 	void (*lock)(struct sbus_priv *self);
 	void (*unlock)(struct sbus_priv *self);
-	int (*irq_subscribe)(struct sbus_priv *self, sbus_irq_handler handler,
-				void *priv);
-	int (*irq_unsubscribe)(struct sbus_priv *self);
-	void (*irq_enable)(struct sbus_priv *self, int enable);
-	int (*reset)(struct sbus_priv *self);
 	size_t (*align_size)(struct sbus_priv *self, size_t size);
-#ifdef CONFIG_CW1200_PM
 	int (*power_mgmt)(struct sbus_priv *self, bool suspend);
-#endif
+	void (*irq_enable)(struct sbus_priv *self,int enable);
 };
 
 #endif /* CW1200_SBUS_H */

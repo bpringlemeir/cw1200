@@ -2,7 +2,7 @@
  * ITP code for ST-Ericsson CW1200 mac80211 driver
  *
  * Copyright (c) 2011, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -23,18 +23,12 @@ struct dentry;
 #define TEST_MODE_NO_TEST	(0)
 #define TEST_MODE_RX_TEST	(1)
 #define TEST_MODE_TX_TEST	(2)
-
-#define itp_printk(...) printk(__VA_ARGS__)
 #define ITP_DEFAULT_DA_ADDR {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 #define ITP_MIN_DATA_SIZE 6
 #define ITP_MAX_DATA_SIZE 1600
 #define ITP_TIME_THRES_US 10000
 #define ITP_US_TO_MS(x) ((x)/1000)
 #define ITP_MS_TO_US(x) ((x)*1000)
-#if ((ITP_US_TO_MS(ITP_TIME_THRES_US))*HZ/1000) < 1
-#warning not able to achieve non-busywaiting ITP_TIME_THRES_US\
-precision with current HZ value !
-#endif
 #define ITP_BUF_SIZE 255
 
 
@@ -105,8 +99,7 @@ bool cw1200_itp_tx_running(struct cw1200_common *priv);
 
 #else /* CONFIG_CW1200_ITP */
 
-static inline int
-cw1200_itp_init(struct cw1200_common *priv)
+static inline int cw1200_itp_init(struct cw1200_common *priv)
 {
 	return 0;
 }
@@ -121,7 +114,7 @@ static inline bool cw1200_is_itp(struct cw1200_common *priv)
 }
 
 static inline bool cw1200_itp_rxed(struct cw1200_common *priv,
-		struct sk_buff *skb)
+				   struct sk_buff *skb)
 {
 	return false;
 }
@@ -136,7 +129,7 @@ static inline void cw1200_itp_wake_up_tx(struct cw1200_common *priv)
 }
 
 static inline int cw1200_itp_get_tx(struct cw1200_common *priv, u8 **data,
-		size_t *tx_len, int *burst)
+				    size_t *tx_len, int *burst)
 {
 	return 0;
 }

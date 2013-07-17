@@ -1,9 +1,8 @@
-
 /*
  * Mac80211 SDIO driver for ST-Ericsson CW1200 device
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -18,90 +17,23 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/sdio.h>
-#include <linux/spinlock.h>
-#include <asm/mach-types.h>
 #include <net/mac80211.h>
 
 #include "cw1200.h"
 #include "sbus.h"
-#include "cw1200_plat.h"
+#include <linux/cw1200_platform.h>
 #include "hwio.h"
 
-MODULE_AUTHOR("Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>");
+MODULE_AUTHOR("Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>");
 MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SDIO driver");
 MODULE_LICENSE("GPL");
 
 #define SDIO_BLOCK_SIZE (512)
 
-#define USE_INTERNAL_RESOURCE_LIST
-// XXX The intent is that this info is part of the board platform data in arch/mach-xxxx/mach-yyyy.c
-
-#ifdef USE_INTERNAL_RESOURCE_LIST
-static struct resource cw1200_href_resources[] = {
-        {
-                .start = 215,  // fix me as appropriate
-                .end = 215,    // ditto.
-                .flags = IORESOURCE_IO,
-                .name = "cw1200_wlan_reset",
-        },
-#ifdef CONFIG_CW1200_USE_GPIO_IRQ
-        {
-                .start = NOMADIK_GPIO_TO_IRQ(216), // fix me as appropriate
-                .end = NOMADIK_GPIO_TO_IRQ(216),   // ditto
-                .flags = IORESOURCE_IRQ,
-                .name = "cw1200_wlan_irq",
-        },
-#endif /* CONFIG_CW1200_USE_GPIO_IRQ */
-};
-
-static int cw1200_power_ctrl(const struct cw1200_platform_data *pdata,
-                             bool enable) 
-{
-	/* Turn PWR_EN off and on as appropriate. */
-	/* Note this is not needed when there's a hardware reset circuit */
-
-	return 0;
-}
-
-static int cw1200_clk_ctrl(const struct cw1200_platform_data *pdata,
-			   bool enable) 
-{
-	/* Turn CLK_32K off and on as appropriate. */
-	/* Note this is not needed if it's always on */
-	return 0;
-}
-
-struct cw1200_platform_data cw1200_platform_data = {
-	.mmc_id = "mmc1",
-#ifdef CONFIG_CW1200_POLL_IRQ
-	.disable_irq = 1, /* stupid mx51bbg */
-#endif
-	.pll_init_val = DPLL_INIT_VAL_CW1200_38_4MHZ,
-//	.reset = &cw1200_href_resources[0],
-#ifdef CONFIG_CW1200_USE_GPIO_IRQ
-	.irq = &cw1200_href_resources[1],
-#endif
-	.power_ctrl = cw1200_power_ctrl,
-	.clk_ctrl = cw1200_clk_ctrl,
-};
-
-const struct cw1200_platform_data *cw1200_get_platform_data(void)
-{
-        return &cw1200_platform_data;
-}
-EXPORT_SYMBOL_GPL(cw1200_get_platform_data);
-#endif
-
 struct sbus_priv {
 	struct sdio_func	*func;
 	struct cw1200_common	*core;
-	const struct cw1200_platform_data *pdata;
-	spinlock_t		lock;
-	sbus_irq_handler	irq_handler;
-	void			*irq_priv;
-#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
-	volatile int claimed;
-#endif
+	const struct cw1200_platform_data_sdio *pdata;
 };
 
 #ifndef SDIO_VENDOR_ID_STE
@@ -114,7 +46,6 @@ struct sbus_priv {
 
 static const struct sdio_device_id cw1200_sdio_ids[] = {
 	{ SDIO_DEVICE(SDIO_VENDOR_ID_STE, SDIO_DEVICE_ID_STE_CW1200) },
-//	{ SDIO_DEVICE(SDIO_ANY_ID, SDIO_ANY_ID) },
 	{ /* end: all zeroes */			},
 };
 
@@ -136,131 +67,91 @@ static int cw1200_sdio_memcpy_toio(struct sbus_priv *self,
 
 static void cw1200_sdio_lock(struct sbus_priv *self)
 {
-#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
-	unsigned long flags;
-	spin_lock_irqsave(&self->lock, flags);
-	if (!mmc_try_claim_host(self->func->card->host)) {
-		self->claimed++;
-	}
-	spin_unlock_irqrestore(&self->lock, flags);
-#else
 	sdio_claim_host(self->func);
-#endif
 }
 
 static void cw1200_sdio_unlock(struct sbus_priv *self)
 {
-#ifdef CONFIG_CW1200_SDIO_IRQ_WORKAROUND
-	unsigned long flags;
-	spin_lock_irqsave(&self->lock, flags);
-	if (!self->claimed) {
-		sdio_release_host(self->func);
-	} else {
-		self->claimed--;
-	}
-	spin_unlock_irqrestore(&self->lock, flags);
-#else
 	sdio_release_host(self->func);
-#endif
 }
 
-#ifndef CONFIG_CW1200_USE_GPIO_IRQ
 static void cw1200_sdio_irq_handler(struct sdio_func *func)
 {
 	struct sbus_priv *self = sdio_get_drvdata(func);
-	unsigned long flags;
 
-	BUG_ON(!self);
-	spin_lock_irqsave(&self->lock, flags);
-	if (self->irq_handler)
-		self->irq_handler(self->irq_priv);
-	spin_unlock_irqrestore(&self->lock, flags);
+	/* note:  sdio_host already claimed here. */
+	if (self->core)
+		cw1200_irq_handler(self->core);
 }
-#else /* CONFIG_CW1200_USE_GPIO_IRQ */
-static irqreturn_t cw1200_gpio_irq_handler(int irq, void *dev_id)
+
+static irqreturn_t cw1200_gpio_hardirq(int irq, void *dev_id)
+{
+	return IRQ_WAKE_THREAD;
+}
+
+static irqreturn_t cw1200_gpio_irq(int irq, void *dev_id)
 {
 	struct sbus_priv *self = dev_id;
 
-	BUG_ON(!self);
-	if (self->irq_handler)
-		self->irq_handler(self->irq_priv);
-	return IRQ_HANDLED;
+	if (self->core) {
+		sdio_claim_host(self->func);
+		cw1200_irq_handler(self->core);
+		sdio_release_host(self->func);
+		return IRQ_HANDLED;
+	} else {
+		return IRQ_NONE;
+	}
 }
 
-static int cw1200_request_irq(struct sbus_priv *self,
-			      irq_handler_t handler)
+static int cw1200_request_irq(struct sbus_priv *self)
 {
 	int ret;
-	int func_num;
 	const struct resource *irq = self->pdata->irq;
 	u8 cccr;
 
-	ret = request_any_context_irq(irq->start, handler,
-			IRQF_TRIGGER_FALLING, irq->name, self);
-	if (WARN_ON(ret < 0))
-		goto exit;
-
-	/* Hack to access Fuction-0 */
-	func_num = self->func->num;
-	self->func->num = 0;
-
-	cccr = sdio_readb(self->func, SDIO_CCCR_IENx, &ret);
+	cccr = sdio_f0_readb(self->func, SDIO_CCCR_IENx, &ret);
 	if (WARN_ON(ret))
-		goto set_func;
+		goto err;
 
 	/* Master interrupt enable ... */
 	cccr |= BIT(0);
 
 	/* ... for our function */
-	cccr |= BIT(func_num);
+	cccr |= BIT(self->func->num);
 
-	sdio_writeb(self->func, cccr, SDIO_CCCR_IENx, &ret);
+	sdio_f0_writeb(self->func, cccr, SDIO_CCCR_IENx, &ret);
 	if (WARN_ON(ret))
-		goto set_func;
+		goto err;
 
-	/* Restore the WLAN function number */
-	self->func->num = func_num;
+	ret = enable_irq_wake(irq->start);
+	if (WARN_ON(ret))
+		goto err;
+
+	/* Request the IRQ */
+	ret =  request_threaded_irq(irq->start, cw1200_gpio_hardirq,
+				    cw1200_gpio_irq,
+				    IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+				    irq->name, self);
+	if (WARN_ON(ret))
+		goto err;
+
 	return 0;
 
-set_func:
-	self->func->num = func_num;
-	free_irq(irq->start, self);
-exit:
+err:
 	return ret;
 }
-#endif /* CONFIG_CW1200_USE_GPIO_IRQ */
 
-static void cw1200_sdio_irq_enable(struct sbus_priv *self, int enable)
+static int cw1200_sdio_irq_subscribe(struct sbus_priv *self)
 {
-#ifndef CONFIG_CW1200_USE_GPIO_IRQ
-	if (self->pdata->disable_irq) 
-		self->func->card->host->ops->enable_sdio_irq(self->func->card->host, enable);
-#endif
-	return;
-}
+	int ret = 0;
 
-static int cw1200_sdio_irq_subscribe(struct sbus_priv *self,
-				     sbus_irq_handler handler,
-				     void *priv)
-{
-	int ret;
-	unsigned long flags;
-
-	if (!handler)
-		return -EINVAL;
-
-	spin_lock_irqsave(&self->lock, flags);
-	self->irq_priv = priv;
-	self->irq_handler = handler;
-	spin_unlock_irqrestore(&self->lock, flags);
-
-	printk(KERN_DEBUG "SW IRQ subscribe\n");
+	pr_debug("SW IRQ subscribe\n");
 	sdio_claim_host(self->func);
-#ifndef CONFIG_CW1200_USE_GPIO_IRQ
-	ret = sdio_claim_irq(self->func, cw1200_sdio_irq_handler);
-#else
-	ret = cw1200_request_irq(self, cw1200_gpio_irq_handler);
-#endif
+	if (self->pdata->irq)
+		ret = cw1200_request_irq(self);
+	else
+		ret = sdio_claim_irq(self->func, cw1200_sdio_irq_handler);
+
 	sdio_release_host(self->func);
 	return ret;
 }
@@ -268,123 +159,94 @@ static int cw1200_sdio_irq_subscribe(struct sbus_priv *self,
 static int cw1200_sdio_irq_unsubscribe(struct sbus_priv *self)
 {
 	int ret = 0;
-	unsigned long flags;
-#ifdef CONFIG_CW1200_USE_GPIO_IRQ
-	const struct resource *irq = self->pdata->irq;
-#endif
 
-	WARN_ON(!self->irq_handler);
-	if (!self->irq_handler)
-		return 0;
+	pr_debug("SW IRQ unsubscribe\n");
 
-	printk(KERN_DEBUG "SW IRQ unsubscribe\n");
-#ifndef CONFIG_CW1200_USE_GPIO_IRQ
-	sdio_claim_host(self->func);
-	ret = sdio_release_irq(self->func);
-	sdio_release_host(self->func);
-#else
-	free_irq(irq->start, self);
-#endif
-
-	spin_lock_irqsave(&self->lock, flags);
-	self->irq_priv = NULL;
-	self->irq_handler = NULL;
-	spin_unlock_irqrestore(&self->lock, flags);
-
+	if (self->pdata->irq) {
+		disable_irq_wake(self->pdata->irq->start);
+		free_irq(self->pdata->irq->start, self);
+	} else {
+		sdio_claim_host(self->func);
+		ret = sdio_release_irq(self->func);
+		sdio_release_host(self->func);
+	}
 	return ret;
 }
 
-static int cw1200_detect_card(const struct cw1200_platform_data *pdata)
+static int cw1200_sdio_off(const struct cw1200_platform_data_sdio *pdata)
 {
-	/* HACK!!!
-	 * Rely on mmc->class_dev.class set in mmc_alloc_host
-	 * Tricky part: a new mmc hook is being (temporary) created
-	 * to discover mmc_host class.
-	 * Do you know more elegant way how to enumerate mmc_hosts?
-	 */
+	const struct resource *reset = pdata->reset;
 
-	struct mmc_host *mmc = NULL;
-	struct class_dev_iter iter;
-	struct device *dev;
+	if (reset) {
+		gpio_set_value(reset->start, 0);
+		msleep(30); /* Min is 2 * CLK32K cycles */
+		gpio_free(reset->start);
+	}
 
-	mmc = mmc_alloc_host(0, NULL);
-	if (!mmc)
-		return -ENOMEM;
+	if (pdata->power_ctrl)
+		pdata->power_ctrl(pdata, false);
+	if (pdata->clk_ctrl)
+		pdata->clk_ctrl(pdata, false);
 
-	BUG_ON(!mmc->class_dev.class);
-	class_dev_iter_init(&iter, mmc->class_dev.class, NULL, NULL);
-	for (;;) {
-		dev = class_dev_iter_next(&iter);
-		if (!dev) {
-			printk(KERN_ERR "cw1200: %s is not found.\n",
-				pdata->mmc_id);
-			break;
-		} else {
-			struct mmc_host *host = container_of(dev,
-				struct mmc_host, class_dev);
+	return 0;
+}
 
-			if (dev_name(&host->class_dev) &&
-				strcmp(dev_name(&host->class_dev),
-					pdata->mmc_id))
-				continue;
+static int cw1200_sdio_on(const struct cw1200_platform_data_sdio *pdata)
+{
+	const struct resource *reset = pdata->reset;
+	const struct resource *powerup = pdata->reset;
 
-			mmc_detect_change(host, 10);
-			break;
+	/* Ensure I/Os are pulled low */
+	if (reset) {
+		gpio_request(reset->start, reset->name);
+		gpio_direction_output(reset->start, 0);
+	}
+	if (powerup) {
+		gpio_request(powerup->start, powerup->name);
+		gpio_direction_output(powerup->start, 0);
+	}
+	if (reset || powerup)
+		msleep(50); /* Settle time */
+
+	/* Enable 3v3 and 1v8 to hardware */
+	if (pdata->power_ctrl) {
+		if (pdata->power_ctrl(pdata, true)) {
+			pr_err("power_ctrl() failed!\n");
+			return -1;
 		}
 	}
-	mmc_free_host(mmc);
-	return 0;
-}
 
-static int cw1200_sdio_off(const struct cw1200_platform_data *pdata)
-{
-	const struct resource *reset = pdata->reset;
-	if (!reset) return 0;
-	gpio_set_value(reset->start, 0);
-	cw1200_detect_card(pdata);
-	gpio_free(reset->start);
-	return 0;
-}
+	/* Enable CLK32K */
+	if (pdata->clk_ctrl) {
+		if (pdata->clk_ctrl(pdata, true)) {
+			pr_err("clk_ctrl() failed!\n");
+			return -1;
+		}
+		msleep(10); /* Delay until clock is stable for 2 cycles */
+	}
 
-static int cw1200_sdio_on(const struct cw1200_platform_data *pdata)
-{
-	const struct resource *reset = pdata->reset;
-	if (!reset) return 0;
-	gpio_request(reset->start, reset->name);
-	gpio_direction_output(reset->start, 1);
-	/* It is not stated in the datasheet, but at least some of devices
-	 * have problems with reset if this stage is omited. */
-	msleep(50);
-	gpio_set_value(reset->start, 0);
-	/* A valid reset shall be obtained by maintaining WRESETN
-	 * active (low) for at least two cycles of LP_CLK after VDDIO
-	 * is stable within it operating range. */
-	usleep_range(1000, 20000);
-	gpio_set_value(reset->start, 1);
-	/* The host should wait 32 ms after the WRESETN release
-	 * for the on-chip LDO to stabilize */
-	msleep(32);
-	cw1200_detect_card(pdata);
-	return 0;
-}
-
-static int cw1200_sdio_reset(struct sbus_priv *self)
-{
-	cw1200_sdio_off(self->pdata);
-	msleep(1000);
-	cw1200_sdio_on(self->pdata);
+	/* Enable POWERUP signal */
+	if (powerup) {
+		gpio_set_value(powerup->start, 1);
+		msleep(250); /* or more..? */
+	}
+	/* Enable RSTn signal */
+	if (reset) {
+		gpio_set_value(reset->start, 1);
+		msleep(50); /* Or more..? */
+	}
 	return 0;
 }
 
 static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 {
-#if defined(CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES)
-	size = sdio_align_size(self->func, size);
-#else /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
-	size = round_up(size, SDIO_BLOCK_SIZE); 
-#endif /* CONFIG_CW1200_NON_POWER_OF_TWO_BLOCKSIZES */
+	if (self->pdata->no_nptb)
+		size = round_up(size, SDIO_BLOCK_SIZE);
+	else
+		size = sdio_align_size(self->func, size);
 
-#ifdef CONFIG_CW1200_SDIO_CMD53_WORKAROUND
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0))
+	/* A quirk to handle this was committed in 3.2-rc */
 	if (size == SDIO_BLOCK_SIZE)
 		size += SDIO_BLOCK_SIZE;  /* HW bug; force use of block mode */
 #endif
@@ -392,50 +254,45 @@ static size_t cw1200_sdio_align_size(struct sbus_priv *self, size_t size)
 	return size;
 }
 
-#ifdef CONFIG_CW1200_PM
 static int cw1200_sdio_pm(struct sbus_priv *self, bool suspend)
 {
 	int ret = 0;
-	const struct resource *irq = self->pdata->irq;
 
-	if (irq)
-		ret = irq_set_irq_wake(irq->start, suspend);
-
+	if (self->pdata->irq)
+		ret = irq_set_irq_wake(self->pdata->irq->start, suspend);
 	return ret;
 }
-#endif
 
 static struct sbus_ops cw1200_sdio_sbus_ops = {
 	.sbus_memcpy_fromio	= cw1200_sdio_memcpy_fromio,
 	.sbus_memcpy_toio	= cw1200_sdio_memcpy_toio,
 	.lock			= cw1200_sdio_lock,
 	.unlock			= cw1200_sdio_unlock,
-	.irq_subscribe		= cw1200_sdio_irq_subscribe,
-	.irq_unsubscribe	= cw1200_sdio_irq_unsubscribe,
-	.reset			= cw1200_sdio_reset,
 	.align_size		= cw1200_sdio_align_size,
-#ifdef CONFIG_CW1200_PM
 	.power_mgmt		= cw1200_sdio_pm,
-#endif
-	.irq_enable             = cw1200_sdio_irq_enable,
 };
 
 /* Probe Function to be called by SDIO stack when device is discovered */
-static int __devinit cw1200_sdio_probe(struct sdio_func *func,
+static int cw1200_sdio_probe(struct sdio_func *func,
 				       const struct sdio_device_id *id)
 {
 	struct sbus_priv *self;
 	int status;
 
-	cw1200_dbg(CW1200_DBG_INIT, "Probe called\n");
+	pr_info("cw1200_wlan_sdio: Probe called\n");
+
+       /* We are only able to handle the wlan function */
+	if (func->num != 0x01)
+		return -ENODEV;
 
 	self = kzalloc(sizeof(*self), GFP_KERNEL);
 	if (!self) {
-		cw1200_dbg(CW1200_DBG_ERROR, "Can't allocate SDIO sbus_priv.");
+		pr_err("Can't allocate SDIO sbus_priv.\n");
 		return -ENOMEM;
 	}
 
-	spin_lock_init(&self->lock);
+	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
+
 	self->pdata = cw1200_get_platform_data();
 	self->func = func;
 	sdio_set_drvdata(func, self);
@@ -443,11 +300,16 @@ static int __devinit cw1200_sdio_probe(struct sdio_func *func,
 	sdio_enable_func(func);
 	sdio_release_host(func);
 
+	status = cw1200_sdio_irq_subscribe(self);
+
 	status = cw1200_core_probe(&cw1200_sdio_sbus_ops,
-				   self, &func->dev, &self->core, 
-				   self->pdata->pll_init_val, 
-				   self->pdata->macaddr);
+				   self, &func->dev, &self->core,
+				   self->pdata->ref_clk,
+				   self->pdata->macaddr,
+				   self->pdata->sdd_file,
+				   self->pdata->have_5ghz);
 	if (status) {
+		cw1200_sdio_irq_unsubscribe(self);
 		sdio_claim_host(func);
 		sdio_disable_func(func);
 		sdio_release_host(func);
@@ -460,11 +322,12 @@ static int __devinit cw1200_sdio_probe(struct sdio_func *func,
 
 /* Disconnect Function to be called by SDIO stack when
  * device is disconnected */
-static void __devexit cw1200_sdio_disconnect(struct sdio_func *func)
+static void cw1200_sdio_disconnect(struct sdio_func *func)
 {
 	struct sbus_priv *self = sdio_get_drvdata(func);
 
 	if (self) {
+		cw1200_sdio_irq_unsubscribe(self);
 		if (self->core) {
 			cw1200_core_release(self->core);
 			self->core = NULL;
@@ -477,35 +340,38 @@ static void __devexit cw1200_sdio_disconnect(struct sdio_func *func)
 	}
 }
 
-static int cw1200_suspend(struct device *dev)
+static int cw1200_sdio_suspend(struct device *dev)
 {
 	int ret;
 	struct sdio_func *func = dev_to_sdio_func(dev);
+	struct sbus_priv *self = sdio_get_drvdata(func);
+
+	if (!cw1200_can_suspend(self->core))
+		return -EAGAIN;
 
 	/* Notify SDIO that CW1200 will remain powered during suspend */
 	ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
 	if (ret)
-		cw1200_dbg(CW1200_DBG_ERROR,
-			   "Error setting SDIO pm flags: %i\n", ret);
+		pr_err("Error setting SDIO pm flags: %i\n", ret);
 
 	return ret;
 }
 
-static int cw1200_resume(struct device *dev)
+static int cw1200_sdio_resume(struct device *dev)
 {
 	return 0;
 }
 
 static const struct dev_pm_ops cw1200_pm_ops = {
-	.suspend = cw1200_suspend,
-	.resume = cw1200_resume,
+	.suspend = cw1200_sdio_suspend,
+	.resume = cw1200_sdio_resume,
 };
 
 static struct sdio_driver sdio_driver = {
 	.name		= "cw1200_wlan_sdio",
 	.id_table	= cw1200_sdio_ids,
 	.probe		= cw1200_sdio_probe,
-	.remove		= __devexit_p(cw1200_sdio_disconnect),
+	.remove		= cw1200_sdio_disconnect,
 	.drv = {
 		.pm = &cw1200_pm_ops,
 	}
@@ -514,58 +380,34 @@ static struct sdio_driver sdio_driver = {
 /* Init Module function -> Called by insmod */
 static int __init cw1200_sdio_init(void)
 {
-	const struct cw1200_platform_data *pdata;
+	const struct cw1200_platform_data_sdio *pdata;
 	int ret;
 
 	pdata = cw1200_get_platform_data();
 
-	if (pdata->clk_ctrl) {
-		ret = pdata->clk_ctrl(pdata, true);
-		if (ret)
-			goto err_clk;
-		msleep(20); // XXX may be lowered?
+	if (cw1200_sdio_on(pdata)) {
+		ret = -1;
+		goto err;
 	}
-
-	if (pdata->power_ctrl) {
-		ret = pdata->power_ctrl(pdata, true);
-		if (ret)
-			goto err_power;
-		msleep(250);  // XXX can be lowered probably
-	}
-
-	ret = cw1200_sdio_on(pdata);
-	if (ret)
-		goto err_on;
 
 	ret = sdio_register_driver(&sdio_driver);
 	if (ret)
-		goto err_reg;
+		goto err;
 
 	return 0;
 
-err_reg:
+err:
 	cw1200_sdio_off(pdata);
-err_on:
-	if (pdata->power_ctrl)
-		pdata->power_ctrl(pdata, false);
-err_power:
-	if (pdata->clk_ctrl)
-		pdata->clk_ctrl(pdata, false);
-err_clk:
 	return ret;
 }
 
 /* Called at Driver Unloading */
 static void __exit cw1200_sdio_exit(void)
 {
-	const struct cw1200_platform_data *pdata;
+	const struct cw1200_platform_data_sdio *pdata;
 	pdata = cw1200_get_platform_data();
 	sdio_unregister_driver(&sdio_driver);
 	cw1200_sdio_off(pdata);
-	if (pdata->power_ctrl)
-		pdata->power_ctrl(pdata, false);
-	if (pdata->clk_ctrl)
-		pdata->clk_ctrl(pdata, false);
 }
 
 

@@ -2,7 +2,7 @@
  * Low-level API for mac80211 ST-Ericsson CW1200 drivers
  *
  * Copyright (c) 2010, ST-Ericsson
- * Author: Dmitry Tarnyagin <dmitry.tarnyagin@stericsson.com>
+ * Author: Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>
  *
  * Based on:
  * ST-Ericsson UMAC CW1200 driver which is
@@ -18,16 +18,6 @@
 #define CW1200_HWIO_H_INCLUDED
 
 /* extern */ struct cw1200_common;
-
-/* DPLL initial values */
-#define DPLL_INIT_VAL_9000		(0x00000191)  /* 19.2MHz */
-#define DPLL_INIT_VAL_CW1200_24_0MHZ	(0x0EC4F121)
-#define DPLL_INIT_VAL_CW1200_38_4MHZ	(0x100010C1)
-
-/* Hardware Type Definitions */
-#define HIF_8601_VERSATILE		(0)
-#define HIF_8601_SILICON		(1)
-#define HIF_9000_SILICON_VERSTAILE	(2)
 
 #define CW1200_CUT_11_ID_STR		(0x302E3830)
 #define CW1200_CUT_22_ID_STR1		(0x302e3132)
@@ -49,35 +39,35 @@
 
 struct download_cntl_t {
 	/* size of whole firmware file (including Cheksum), host init */
-	u32 ImageSize;
+	u32 image_size;
 	/* downloading flags */
-	u32 Flags;
+	u32 flags;
 	/* No. of bytes put into the download, init & updated by host */
-	u32 Put;
+	u32 put;
 	/* last traced program counter, last ARM reg_pc */
-	u32 TracePc;
+	u32 trace_pc;
 	/* No. of bytes read from the download, host init, device updates */
-	u32 Get;
+	u32 get;
 	/* r0, boot losader status, host init to pending, device updates */
-	u32 Status;
+	u32 status;
 	/* Extra debug info, r1 to r14 if status=r0=DOWNLOAD_EXCEPTION */
-	u32 DebugData[DOWNLOAD_CTRL_DATA_DWORDS];
+	u32 debug_data[DOWNLOAD_CTRL_DATA_DWORDS];
 };
 
 #define	DOWNLOAD_IMAGE_SIZE_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, ImageSize))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, image_size))
 #define	DOWNLOAD_FLAGS_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, Flags))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, flags))
 #define DOWNLOAD_PUT_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, Put))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, put))
 #define DOWNLOAD_TRACE_PC_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, TracePc))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, trace_pc))
 #define	DOWNLOAD_GET_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, Get))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, get))
 #define	DOWNLOAD_STATUS_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, Status))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, status))
 #define DOWNLOAD_DEBUG_DATA_REG		\
-	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, DebugData))
+	(DOWNLOAD_CTRL_OFFSET + offsetof(struct download_cntl_t, debug_data))
 #define DOWNLOAD_DEBUG_DATA_LEN		(108)
 
 #define DOWNLOAD_BLOCK_SIZE		(1024)
@@ -105,7 +95,7 @@ struct download_cntl_t {
 #define PAC_BASE_ADDRESS_SILICON	(SYS_BASE_ADDR_SILICON + 0x09000000)
 #define PAC_SHARED_MEMORY_SILICON	(PAC_BASE_ADDRESS_SILICON)
 
-#define CW12000_APB(addr)		(PAC_SHARED_MEMORY_SILICON + (addr))
+#define CW1200_APB(addr)		(PAC_SHARED_MEMORY_SILICON + (addr))
 
 /* ***************************************************************
 *Device register definitions
@@ -154,17 +144,17 @@ struct download_cntl_t {
 /* QueueM */
 #define ST90TDS_CONFIG_ACCESS_MODE_BIT	(BIT(10))
 /* AHB bus */
-#define ST90TDS_CONFIG_AHB_PFETCH_BIT	(BIT(11))
+#define ST90TDS_CONFIG_AHB_PRFETCH_BIT	(BIT(11))
 #define ST90TDS_CONFIG_CPU_CLK_DIS_BIT	(BIT(12))
 /* APB bus */
-#define ST90TDS_CONFIG_PFETCH_BIT	(BIT(13))
+#define ST90TDS_CONFIG_PRFETCH_BIT	(BIT(13))
 /* cpu reset */
 #define ST90TDS_CONFIG_CPU_RESET_BIT	(BIT(14))
 #define ST90TDS_CONFIG_CLEAR_INT_BIT	(BIT(15))
 
 /* For CW1200 the IRQ Enable and Ready Bits are in CONFIG register */
-#define ST90TDS_CONF_IRQ_ENABLE 	(BIT(16))
-#define ST90TDS_CONF_RDY_ENABLE 	(BIT(17))
+#define ST90TDS_CONF_IRQ_ENABLE		(BIT(16))
+#define ST90TDS_CONF_RDY_ENABLE		(BIT(17))
 #define ST90TDS_CONF_IRQ_RDY_ENABLE	(BIT(16)|BIT(17))
 
 int cw1200_data_read(struct cw1200_common *priv,
@@ -182,13 +172,9 @@ static inline int cw1200_reg_read_16(struct cw1200_common *priv,
 {
 	u32 tmp;
 	int i;
-
 	i = cw1200_reg_read(priv, addr, &tmp, sizeof(tmp));
-
+	tmp = le32_to_cpu(tmp);
 	*val = tmp & 0xffff;
-
-	BUG_ON(*val == 0xffff);
-
 	return i;
 }
 
@@ -196,18 +182,22 @@ static inline int cw1200_reg_write_16(struct cw1200_common *priv,
 				      u16 addr, u16 val)
 {
 	u32 tmp = val;
+	tmp = cpu_to_le32(tmp);
 	return cw1200_reg_write(priv, addr, &tmp, sizeof(tmp));
 }
 
 static inline int cw1200_reg_read_32(struct cw1200_common *priv,
 				     u16 addr, u32 *val)
 {
-	return cw1200_reg_read(priv, addr, val, sizeof(*val));
+	int i = cw1200_reg_read(priv, addr, val, sizeof(*val));
+	*val = le32_to_cpu(*val);
+	return i;
 }
 
 static inline int cw1200_reg_write_32(struct cw1200_common *priv,
 				      u16 addr, u32 val)
 {
+	val = cpu_to_le32(val);
 	return cw1200_reg_write(priv, addr, &val, sizeof(val));
 }
 
@@ -220,32 +210,38 @@ static inline int cw1200_apb_read(struct cw1200_common *priv, u32 addr,
 				  void *buf, size_t buf_len)
 {
 	return cw1200_indirect_read(priv, addr, buf, buf_len,
-		ST90TDS_CONFIG_PFETCH_BIT, ST90TDS_SRAM_DPORT_REG_ID);
+				    ST90TDS_CONFIG_PRFETCH_BIT,
+				    ST90TDS_SRAM_DPORT_REG_ID);
 }
 
 static inline int cw1200_ahb_read(struct cw1200_common *priv, u32 addr,
 				  void *buf, size_t buf_len)
 {
 	return cw1200_indirect_read(priv, addr, buf, buf_len,
-		ST90TDS_CONFIG_AHB_PFETCH_BIT, ST90TDS_AHB_DPORT_REG_ID);
+				    ST90TDS_CONFIG_AHB_PRFETCH_BIT,
+				    ST90TDS_AHB_DPORT_REG_ID);
 }
 
 static inline int cw1200_apb_read_32(struct cw1200_common *priv,
 				     u32 addr, u32 *val)
 {
-	return cw1200_apb_read(priv, addr, val, sizeof(val));
+	int i = cw1200_apb_read(priv, addr, val, sizeof(*val));
+	*val = le32_to_cpu(*val);
+	return i;
 }
 
 static inline int cw1200_apb_write_32(struct cw1200_common *priv,
 				      u32 addr, u32 val)
 {
+	val = cpu_to_le32(val);
 	return cw1200_apb_write(priv, addr, &val, sizeof(val));
 }
-
 static inline int cw1200_ahb_read_32(struct cw1200_common *priv,
 				     u32 addr, u32 *val)
 {
-	return cw1200_ahb_read(priv, addr, val, sizeof(val));
+	int i = cw1200_ahb_read(priv, addr, val, sizeof(*val));
+	*val = le32_to_cpu(*val);
+	return i;
 }
 
 #endif /* CW1200_HWIO_H_INCLUDED */
