@@ -151,6 +151,7 @@ struct cw1200_common {
 	int output_power;
 
 	/* BBP/MAC state */
+	int				fixed_sdd;
 	struct ieee80211_rate		*rates;
 	struct ieee80211_rate		*mcs_rates;
 	struct ieee80211_channel	*channel;

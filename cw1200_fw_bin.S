@@ -17,7 +17,8 @@ fw_wsm_22:
          /* Raw data */
         .align  2
 _fw_sdd_22_bin:
-	.incbin "sdd_22.bin"
+/*	.incbin "sdd_22.bin"*/
+	.incbin "sdd_sagrad_1091_1098.bin"
 1:
 
          /* A firmware struct for sdd_22 */

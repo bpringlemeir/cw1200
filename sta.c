@@ -1112,6 +1112,8 @@ static int cw1200_parse_sdd_file(struct cw1200_common *priv)
 	return ret;
 }
 
+extern const struct firmware fw_sdd_22;
+
 int cw1200_setup_mac(struct cw1200_common *priv)
 {
 	int ret = 0;
@@ -1141,7 +1143,19 @@ int cw1200_setup_mac(struct cw1200_common *priv)
 	if (threshold.rssiRcpiMode & WSM_RCPI_RSSI_USE_RSSI)
 		priv->cqm_use_rssi = true;
 
-	if (!priv->sdd) {
+    priv->fixed_sdd = 0;
+	switch (priv->hw_revision) {
+	case CW1200_HW_REV_CUT22:
+        priv->sdd = &fw_sdd_22;
+        priv->fixed_sdd = 1;
+		cw1200_parse_sdd_file(priv);
+		break;
+	default:
+		printk(KERN_ERR"%s(): H/W revision not supported!\n",__func__);
+		return -EFAULT;
+	}
+
+	if (!priv->fixed_sdd) {
 		ret = request_firmware(&priv->sdd, priv->sdd_path, priv->pdev);
 		if (ret) {
 			pr_err("Can't load sdd file %s.\n", priv->sdd_path);
