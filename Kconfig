@@ -15,11 +15,27 @@ config CW1200_WLAN_SDIO
        help
          This enables support for the CW1200 via an SDIO bus.
 
+config CW1200_SPI
+       tristate "Support SPI platform"
+       depends on CW1200 && SPI       	
+
+choice 
+       prompt "SPI platform subtype"
+       depends on CW1200_SPI
+       default CW1200_WLAN_SPI
+       
 config CW1200_WLAN_SPI
-       tristate "Support SPI platforms"
+       tristate "Support SPI Linux default bus master"
        depends on CW1200 && SPI
        help
          This enables support for the CW1200 via a SPI bus.
+
+config CW1200_WLAN_SPI_NBS
+       tristate "Support SPI NBS bus master (EXPERIMENTAL)"
+       depends on CW1200 && SPI
+       help
+         This enables support for the CW1200 via a SPI NBS bus.
+endchoice
 
 config CW1200_WLAN_SAGRAD
        tristate "Support Sagrad SG901-1091/1098 modules"
