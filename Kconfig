@@ -20,6 +20,7 @@ config CW1200_SPI
        depends on CW1200 && SPI       	
 
 choice 
+       tristate
        prompt "SPI platform subtype"
        depends on CW1200_SPI
        default CW1200_WLAN_SPI
