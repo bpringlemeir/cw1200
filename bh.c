@@ -141,7 +141,7 @@ void cw1200_irq_handler(struct cw1200_common *priv)
 	/* Disable Interrupts! */
 	/* NOTE:  sbus_ops->lock already held */
 // VLAD: crashes kernel with Linux SPI stock driver
-#if defined(CONFIG_CW1200_WLAN_SPI_NBS) || defined(CONFIG_CW1200_WLAN_SPI_NBS)
+#if defined(CONFIG_CW1200_WLAN_SPI_NBS) || defined(CONFIG_CW1200_WLAN_SPI_NBS_MODULE)
 	__cw1200_irq_enable(priv, 0);
 #endif
 	if (WARN_ON(priv->bh_error))
