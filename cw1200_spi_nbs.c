@@ -77,8 +77,8 @@ static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
 	regaddr |= (count>>1);
 	regaddr = cpu_to_le16(regaddr);
 
-	if(count < 5) {  /* optimized for reg16/reg32 I/O */
-     u8 spi_io_buf[8];
+	if(unlikely(count < 0)) {  /* single SPI transaction crashes firmware, disabled*/
+     u8 spi_io_buf[32];
      spi_io_buf[0] = ((u8*)&regaddr)[1];
      spi_io_buf[1] = ((u8*)&regaddr)[0];
      t_addr.len = count + 2;
@@ -97,7 +97,15 @@ static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
        } else if( 2 == count) {
          ((u8*)dst)[0] = spi_io_buf[3];
          ((u8*)dst)[1] = spi_io_buf[2];
-       } else return -ENOTSUPP;
+       }  else if( 0 == (count&1) ) { // data must be presented in 16-bit words
+           for( i = 0; i < (count>>1); i += 2) {
+        	   ((u8*)dst)[ 2 + i ] = spi_io_buf[i+1];
+        	   ((u8*)dst)[ 3 + i ] = spi_io_buf[i];
+           }
+         } else {
+        	 printk(KERN_CRIT"VLAD: %s(%d)!!!\n",__func__,count);
+        	 return -ENOTSUPP;
+         }
      }
 
 	} else {
@@ -154,8 +162,8 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
 	regaddr |= (count>>1);
 	regaddr = cpu_to_le16(regaddr);
 
-	if(count < 5) {
-	     u8 spi_io_buf[8];
+	if(unlikely(count <  0)) { /* single SPI transaction crashes firmware, disabled*/
+	     u8 spi_io_buf[32];
 	     spi_io_buf[0] = ((u8*)&regaddr)[1];
 	     spi_io_buf[1] = ((u8*)&regaddr)[0];
          if( 4 == count) {
@@ -166,7 +174,15 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
          } else if( 2 == count) {
              spi_io_buf[2] = ((u8*)src)[1];
         	 spi_io_buf[3] = ((u8*)src)[0];
-         } else return -ENOTSUPP;
+         } else if( 0 == (count&1) ) { // data must be presented in 16-bit words
+           for( i = 0; i < (count>>1); i += 2) {
+             spi_io_buf[ 2 + i ] = ((u8*)src)[i+1];
+          	 spi_io_buf[ 3 + i ] = ((u8*)src)[i];
+           }
+         } else {
+        	 printk(KERN_CRIT"VLAD: %s(%d)!!!\n",__func__,count);
+        	 return -ENOTSUPP;
+         }
 
 	     t_addr.len = count + 2;
 	     t_addr.tx_buf = spi_io_buf;
