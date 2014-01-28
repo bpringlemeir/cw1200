@@ -30,7 +30,7 @@
 #include "txrx.h"
 #include "pm.h"
 // VLAD: does not compile, because WQ_MEM_RECLAIM was introduced in 2.6.38 kernel
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 38))
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36))
 #define CW1200_USE_COMPAT_KTHREAD
 #endif
 

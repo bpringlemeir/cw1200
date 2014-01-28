@@ -42,6 +42,7 @@ struct sbus_priv {
 	struct cw1200_common	*core;
 	const struct cw1200_platform_data_spi *pdata;
 	spinlock_t		lock; /* Serialize all bus operations */
+	wait_queue_head_t       wq;
 	int claimed;
 };
 
@@ -193,11 +194,11 @@ static void cw1200_spi_lock(struct sbus_priv *self)
 {
 	unsigned long flags;
 
-#if 0
+	DECLARE_WAITQUEUE(wait, current);
 
-#else
 	might_sleep();
 
+	add_wait_queue(&self->wq, &wait);
 	spin_lock_irqsave(&self->lock, flags);
 	while (1) {
 		set_current_state(TASK_UNINTERRUPTIBLE);
@@ -210,20 +211,20 @@ static void cw1200_spi_lock(struct sbus_priv *self)
 	set_current_state(TASK_RUNNING);
 	self->claimed = 1;
 	spin_unlock_irqrestore(&self->lock, flags);
-#endif
+	remove_wait_queue(&self->wq, &wait);
+
 	return;
 }
 
 static void cw1200_spi_unlock(struct sbus_priv *self)
 {
 	unsigned long flags;
-#if 0
 
-#else
 	spin_lock_irqsave(&self->lock, flags);
 	self->claimed = 0;
 	spin_unlock_irqrestore(&self->lock, flags);
-#endif
+	wake_up(&self->wq);
+
 	return;
 }
 
@@ -232,7 +233,9 @@ static irqreturn_t cw1200_spi_irq_handler(int irq, void *dev_id)
 	struct sbus_priv *self = dev_id;
 
 	if (self->core) {
+		cw1200_spi_lock(self);
 		cw1200_irq_handler(self->core);
+		cw1200_spi_unlock(self);
 		return IRQ_HANDLED;
 	} else {
 		return IRQ_NONE;
@@ -245,11 +248,10 @@ static int cw1200_spi_irq_subscribe(struct sbus_priv *self)
 
 	pr_debug("SW IRQ subscribe\n");
 
-	ret = request_any_context_irq(self->func->irq, cw1200_spi_irq_handler,
-// VLAD:
-//				      IRQF_TRIGGER_HIGH,
-			          IRQF_TRIGGER_RISING,
-				      "cw1200_wlan_irq", self);
+	ret = request_threaded_irq(self->func->irq, NULL,
+				   cw1200_spi_irq_handler,
+				   IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+				   "cw1200_wlan_irq", self);
 	if (WARN_ON(ret < 0))
 		goto exit;
 
@@ -435,6 +437,8 @@ static int cw1200_spi_probe(struct spi_device *func)
 	spin_lock_init(&self->lock);
 
 	spi_set_drvdata(func, self);
+
+	init_waitqueue_head(&self->wq);
 
 	status = cw1200_spi_irq_subscribe(self);
 

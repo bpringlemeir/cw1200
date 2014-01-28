@@ -70,9 +70,7 @@ int cw1200_register_bh(struct cw1200_common *priv)
 				WQ_MEM_RECLAIM | WQ_HIGHPRI
 				| WQ_CPU_INTENSIVE, 1);
 */
-	priv->bh_workqueue = alloc_workqueue("cw1200_bh",
-				 WQ_HIGHPRI
-				| WQ_CPU_INTENSIVE, 1);
+	priv->bh_workqueue = alloc_workqueue("cw1200_bh",WQ_CPU_INTENSIVE, 1);
 
 	if (!priv->bh_workqueue)
 		return -ENOMEM;
@@ -140,10 +138,7 @@ void cw1200_irq_handler(struct cw1200_common *priv)
 
 	/* Disable Interrupts! */
 	/* NOTE:  sbus_ops->lock already held */
-// VLAD: crashes kernel with Linux SPI stock driver
-#if defined(CONFIG_CW1200_WLAN_SPI_NBS) || defined(CONFIG_CW1200_WLAN_SPI_NBS_MODULE)
 	__cw1200_irq_enable(priv, 0);
-#endif
 	if (WARN_ON(priv->bh_error))
 		return;
 
