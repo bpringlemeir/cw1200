@@ -142,6 +142,11 @@ void cw1200_stop(struct ieee80211_hw *dev)
 	atomic_xchg(&priv->tx_lock, 0); /* for recovery to work */
 }
 
+static int cw1200_bssloss_mitigation = 1;
+module_param(cw1200_bssloss_mitigation, int, 0644);
+MODULE_PARM_DESC(cw1200_bssloss_mitigation, "BSS Loss mitigation. 0 == disabled, 1 == enabled (default)");
+
+
 void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 			     int init, int good, int bad)
 {
@@ -181,6 +186,10 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 		cancel_delayed_work_sync(&priv->bss_loss_work);
 		priv->bss_loss_state = 0;
 	}
+
+	/* Bypass mitigation if it's disabled */
+	if (!cw1200_bssloss_mitigation)
+		tx = 0;
 
 	/* Spit out a NULL packet to our AP if necessary */
 	if (tx) {
