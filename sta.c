@@ -12,6 +12,7 @@
 #include <linux/vmalloc.h>
 #include <linux/sched.h>
 #include <linux/firmware.h>
+#include <linux/module.h>
 
 #include "cw1200.h"
 #include "sta.h"
@@ -22,7 +23,6 @@
 #ifndef ERP_INFO_BYTE_OFFSET
 #define ERP_INFO_BYTE_OFFSET 2
 #endif
-
 
 static void cw1200_do_join(struct cw1200_common *priv);
 static void cw1200_do_unjoin(struct cw1200_common *priv);
@@ -342,8 +342,8 @@ int cw1200_config(struct ieee80211_hw *dev, u32 changed)
 	}
 
 	if ((changed & IEEE80211_CONF_CHANGE_CHANNEL) &&
-	    (priv->channel != conf->channel)) {
-		struct ieee80211_channel *ch = conf->channel;
+	    (priv->channel != conf->chandef.chan)) {
+		struct ieee80211_channel *ch = conf->chandef.chan;
 		struct wsm_switch_channel channel = {
 			.channel_number = ch->hw_value,
 		};
@@ -483,15 +483,14 @@ void cw1200_update_filtering(struct cw1200_common *priv)
 		bf_tbl.num = __cpu_to_le32(3);
 	}
 
-	/*
-	* When acting as p2p client being connected to p2p GO, in order to
-	* receive frames from a different p2p device, turn off bssid filter.
-	*
-	* WARNING: FW dependency!
-	* This can only be used with FW WSM371 and its successors.
-	* In that FW version even with bssid filter turned off,
-	* device will block most of the unwanted frames.
-	*/
+	/* When acting as p2p client being connected to p2p GO, in order to
+	 * receive frames from a different p2p device, turn off bssid filter.
+	 *
+	 * WARNING: FW dependency!
+	 * This can only be used with FW WSM371 and its successors.
+	 * In that FW version even with bssid filter turned off,
+	 * device will block most of the unwanted frames.
+	 */
 	if (is_p2p)
 		bssid_filtering = false;
 
@@ -531,8 +530,13 @@ void cw1200_set_beacon_wakeup_period_work(struct work_struct *work)
 				     priv->join_dtim_period, 0);
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 			     struct netdev_hw_addr_list *mc_list)
+#else
+u64 cw1200_prepare_multicast(struct ieee80211_hw *hw, int mc_count,
+			     struct dev_addr_list *ha)
+#endif
 {
 	static u8 broadcast_ipv6[ETH_ALEN] = {
 		0x33, 0x33, 0x00, 0x00, 0x00, 0x01
@@ -541,13 +545,16 @@ u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 		0x01, 0x00, 0x5e, 0x00, 0x00, 0x01
 	};
 	struct cw1200_common *priv = hw->priv;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 	struct netdev_hw_addr *ha;
+#endif
 	int count = 0;
 
 	/* Disable multicast filtering */
 	priv->has_multicast_subscription = false;
 	memset(&priv->multicast_filter, 0x00, sizeof(priv->multicast_filter));
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 	if (netdev_hw_addr_list_count(mc_list) > WSM_MAX_GRP_ADDRTABLE_ENTRIES)
 		return 0;
 
@@ -561,13 +568,26 @@ u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 			priv->has_multicast_subscription = true;
 		count++;
 	}
+#else
+	while (ha &&
+	       count < mc_count &&
+	       count < WSM_MAX_GRP_ADDRTABLE_ENTRIES) {
+		memcpy(&priv->multicast_filter.macaddrs[count],
+		       ha->dmi_addr, ETH_ALEN);
+		if (memcmp(ha->dmi_addr, broadcast_ipv4, ETH_ALEN) &&
+		    memcmp(ha->dmi_addr, broadcast_ipv6, ETH_ALEN))
+			priv->has_multicast_subscription = true;
+		count++;
+		ha = ha->next;
+	}
+#endif
 
 	if (count) {
 		priv->multicast_filter.enable = __cpu_to_le32(1);
 		priv->multicast_filter.num_addrs = __cpu_to_le32(count);
 	}
 
-	return netdev_hw_addr_list_count(mc_list);
+	return count;
 }
 
 void cw1200_configure_filter(struct ieee80211_hw *dev,
@@ -622,7 +642,7 @@ int cw1200_conf_tx(struct ieee80211_hw *dev, struct ieee80211_vif *vif,
 	mutex_lock(&priv->conf_mutex);
 
 	if (queue < dev->queues) {
-		old_uapsd_flags = priv->uapsd_info.uapsd_flags;
+		old_uapsd_flags = le16_to_cpu(priv->uapsd_info.uapsd_flags);
 
 		WSM_TX_QUEUE_SET(&priv->tx_queue_params, queue, 0, 0, 0);
 		ret = wsm_set_tx_queue_params(priv,
@@ -646,7 +666,7 @@ int cw1200_conf_tx(struct ieee80211_hw *dev, struct ieee80211_vif *vif,
 			ret = cw1200_set_uapsd_param(priv, &priv->edca);
 			if (!ret && priv->setbssparams_done &&
 			    (priv->join_status == CW1200_JOIN_STATUS_STA) &&
-			    (old_uapsd_flags != priv->uapsd_info.uapsd_flags))
+			    (old_uapsd_flags != le16_to_cpu(priv->uapsd_info.uapsd_flags)))
 				ret = cw1200_set_pm(priv, &priv->powersave_mode);
 		}
 	} else {
@@ -936,7 +956,7 @@ static int __cw1200_flush(struct cw1200_common *priv, bool drop)
 	return ret;
 }
 
-void cw1200_flush(struct ieee80211_hw *hw, bool drop)
+void cw1200_flush(struct ieee80211_hw *hw, u32 queues, bool drop)
 {
 	struct cw1200_common *priv = hw->priv;
 
@@ -1015,17 +1035,17 @@ void cw1200_event_handler(struct work_struct *work)
 			/* RSSI: signed Q8.0, RCPI: unsigned Q7.1
 			 * RSSI = RCPI / 2 - 110
 			 */
-			int rcpiRssi = (int)(event->evt.data & 0xFF);
+			int rcpi_rssi = (int)(event->evt.data & 0xFF);
 			int cqm_evt;
 			if (priv->cqm_use_rssi)
-				rcpiRssi = (s8)rcpiRssi;
+				rcpi_rssi = (s8)rcpi_rssi;
 			else
-				rcpiRssi =  rcpiRssi / 2 - 110;
+				rcpi_rssi =  rcpi_rssi / 2 - 110;
 
-			cqm_evt = (rcpiRssi <= priv->cqm_rssi_thold) ?
+			cqm_evt = (rcpi_rssi <= priv->cqm_rssi_thold) ?
 				NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW :
 				NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH;
-			pr_debug("[CQM] RSSI event: %d.\n", rcpiRssi);
+			pr_debug("[CQM] RSSI event: %d.\n", rcpi_rssi);
 			ieee80211_cqm_rssi_notify(priv->vif, cqm_evt,
 						  GFP_KERNEL);
 			break;
@@ -1068,8 +1088,7 @@ void cw1200_bss_params_work(struct work_struct *work)
 /* ******************************************************************** */
 /* Internal API								*/
 
-/*
- * This function is called to Parse the SDD file
+/* This function is called to Parse the SDD file
  * to extract listen_interval and PTA related information
  * sdd is a TLV: u8 id, u8 len, u8 data[]
  */
@@ -1091,18 +1110,18 @@ static int cw1200_parse_sdd_file(struct cw1200_common *priv)
 				ret = -1;
 				break;
 			}
-			v = le16_to_cpu(*((u16 *)(p + 2)));
+			v = le16_to_cpu(*((__le16 *)(p + 2)));
 			if (!v)  /* non-zero means this is enabled */
 				break;
 
-			v = le16_to_cpu(*((u16 *)(p + 4)));
+			v = le16_to_cpu(*((__le16 *)(p + 4)));
 			priv->conf_listen_interval = (v >> 7) & 0x1F;
 			pr_debug("PTA found; Listen Interval %d\n",
 				 priv->conf_listen_interval);
 			break;
 		}
 		case SDD_REFERENCE_FREQUENCY_ELT_ID: {
-			u16 clk = le16_to_cpu(*((u16 *)(p + 2)));
+			u16 clk = le16_to_cpu(*((__le16 *)(p + 2)));
 			if (clk != priv->hw_refclk)
 				pr_warn("SDD file doesn't match configured refclk (%d vs %d)\n",
 					clk, priv->hw_refclk);
@@ -1385,7 +1404,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 done_put:
 	mutex_unlock(&priv->conf_mutex);
 	if (bss)
-		cfg80211_put_bss(bss);
+		cfg80211_put_bss(priv->hw->wiphy, bss);
 }
 
 void cw1200_join_timeout(struct work_struct *work)
@@ -1422,11 +1441,8 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 	if (!priv->join_status)
 		goto done;
 
-	if (priv->join_status > CW1200_JOIN_STATUS_IBSS) {
-		wiphy_err(priv->hw->wiphy, "Unexpected: join status: %d\n",
-			  priv->join_status);
-		BUG_ON(1);
-	}
+	if (priv->join_status == CW1200_JOIN_STATUS_AP)
+		goto done;
 
 	cancel_work_sync(&priv->update_filtering_work);
 	cancel_work_sync(&priv->set_beacon_wakeup_period_work);
@@ -1801,9 +1817,9 @@ static int cw1200_set_btcoexinfo(struct cw1200_common *priv)
 		} else {
 			pr_debug("[STA] STA has non ERP rates\n");
 			/* B only mode */
-			arg.internalTxRate = (__ffs(priv->association_mode.basic_rate_set));
+			arg.internalTxRate = (__ffs(le32_to_cpu(priv->association_mode.basic_rate_set)));
 		}
-		arg.nonErpInternalTxRate = (__ffs(priv->association_mode.basic_rate_set));
+		arg.nonErpInternalTxRate = (__ffs(le32_to_cpu(priv->association_mode.basic_rate_set)));
 	} else {
 		/* P2P mode */
 		arg.internalTxRate = (__ffs(priv->bss_params.operational_rate_set & ~0xF));
@@ -1840,8 +1856,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 		struct wsm_mib_arp_ipv4_filter filter = {0};
 		int i;
 
-		pr_debug("[STA] BSS_CHANGED_ARP_FILTER enabled: %d, cnt: %d\n",
-			 info->arp_filter_enabled,
+		pr_debug("[STA] BSS_CHANGED_ARP_FILTER cnt: %d\n",
 			 info->arp_addr_cnt);
 
 		/* Currently only one IP address is supported by firmware.
@@ -1854,8 +1869,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				pr_debug("[STA] addr[%d]: 0x%X\n",
 					 i, filter.ipv4addrs[i]);
 			}
-			if (info->arp_filter_enabled)
-				filter.enable = __cpu_to_le32(1);
+			filter.enable = __cpu_to_le32(1);
 		}
 
 		pr_debug("[STA] arp ip filter enable: %d\n",
@@ -1926,7 +1940,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 
 		if (info->assoc || info->ibss_joined) {
 			struct ieee80211_sta *sta = NULL;
-			u32 val = 0;
+			__le32 htprot = 0;
 
 			if (info->dtim_period)
 				priv->join_dtim_period = info->dtim_period;
@@ -1941,7 +1955,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				priv->bss_params.operational_rate_set =
 					cw1200_rate_mask_to_wsm(priv,
 								sta->supp_rates[priv->channel->band]);
-				priv->ht_info.channel_type = dev->conf.channel_type;
+				priv->ht_info.channel_type = cfg80211_get_chandef_type(&dev->conf.chandef);
 				priv->ht_info.operation_mode = info->ht_operation_mode;
 			} else {
 				memset(&priv->ht_info, 0,
@@ -1950,32 +1964,21 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 			}
 			rcu_read_unlock();
 
-#if 0
-			/* FIXME: Temporarily disable GF support due to buggy
-			 * APs advertising support but not handling it
-			 * properly.  Is there a better way to handle this?
-			 */
-			pr_debug("[STA] HT_GF was %d (forcing off)\n",
-				 cw1200_ht_greenfield(&priv->ht_info));
-			priv->ht_info.operation_mode |= IEEE80211_HT_OP_MODE_NON_GF_STA_PRSNT;
-#endif
-
 			/* Non Greenfield stations present */
 			if (priv->ht_info.operation_mode &
 			    IEEE80211_HT_OP_MODE_NON_GF_STA_PRSNT)
-				val |= WSM_NON_GREENFIELD_STA_PRESENT;
+				htprot |= cpu_to_le32(WSM_NON_GREENFIELD_STA_PRESENT);
 
 			/* Set HT protection method */
-			val |= (priv->ht_info.operation_mode & IEEE80211_HT_OP_MODE_PROTECTION) << 2;
+			htprot |= cpu_to_le32((priv->ht_info.operation_mode & IEEE80211_HT_OP_MODE_PROTECTION) << 2);
 
 			/* TODO:
 			 * STBC_param.dual_cts
 			 *  STBC_param.LSIG_TXOP_FILL
 			 */
 
-			val = cpu_to_le32(val);
 			wsm_write_mib(priv, WSM_MIB_ID_SET_HT_PROTECTION,
-				      &val, sizeof(val));
+				      &htprot, sizeof(htprot));
 
 			priv->association_mode.greenfield =
 				cw1200_ht_greenfield(&priv->ht_info);
@@ -2430,4 +2433,3 @@ static int cw1200_update_beaconing(struct cw1200_common *priv)
 	}
 	return 0;
 }
-

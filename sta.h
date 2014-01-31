@@ -34,20 +34,21 @@ int cw1200_conf_tx(struct ieee80211_hw *dev, struct ieee80211_vif *vif,
 		   u16 queue, const struct ieee80211_tx_queue_params *params);
 int cw1200_get_stats(struct ieee80211_hw *dev,
 		     struct ieee80211_low_level_stats *stats);
-/* Not more a part of interface?
-int cw1200_get_tx_stats(struct ieee80211_hw *dev,
-			struct ieee80211_tx_queue_stats *stats);
-*/
 int cw1200_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 		   struct ieee80211_vif *vif, struct ieee80211_sta *sta,
 		   struct ieee80211_key_conf *key);
 
 int cw1200_set_rts_threshold(struct ieee80211_hw *hw, u32 value);
 
-void cw1200_flush(struct ieee80211_hw *hw, bool drop);
+void cw1200_flush(struct ieee80211_hw *hw, u32 queues, bool drop);
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 			     struct netdev_hw_addr_list *mc_list);
+#else
+u64 cw1200_prepare_multicast(struct ieee80211_hw *dev, int mc_count,
+			     struct dev_addr_list *ha);
+#endif
 
 int cw1200_set_pm(struct cw1200_common *priv, const struct wsm_set_pm *arg);
 
@@ -67,8 +68,10 @@ void cw1200_bss_params_work(struct work_struct *work);
 void cw1200_keep_alive_work(struct work_struct *work);
 void cw1200_tx_failure_work(struct work_struct *work);
 
-void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv, int init, int good, int bad);
-static inline void cw1200_cqm_bssloss_sm(struct cw1200_common *priv, int init, int good, int bad)
+void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv, int init, int good,
+			     int bad);
+static inline void cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
+					 int init, int good, int bad)
 {
 	spin_lock(&priv->bss_loss_lock);
 	__cw1200_cqm_bssloss_sm(priv, init, good, bad);

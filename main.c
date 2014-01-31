@@ -61,12 +61,6 @@ int cw1200_power_mode = wsm_power_mode_quiescent;
 module_param(cw1200_power_mode, int, 0644);
 MODULE_PARM_DESC(cw1200_power_mode, "WSM power mode.  0 == active, 1 == doze, 2 == quiescent (default)");
 
-#ifdef CONFIG_CW1200_ETF
-int etf_mode;
-module_param(etf_mode, int, 0644);
-MODULE_PARM_DESC(etf_mode, "Enable EngineeringTestingFramework operation");
-#endif
-
 #define RATETAB_ENT(_rate, _rateid, _flags)		\
 	{						\
 		.bitrate	= (_rate),		\
@@ -234,20 +228,30 @@ static const struct ieee80211_ops cw1200_ops = {
 	.get_stats		= cw1200_get_stats,
 	.ampdu_action		= cw1200_ampdu_action,
 	.flush			= cw1200_flush,
+#ifdef CONFIG_PM
 	.suspend		= cw1200_wow_suspend,
 	.resume			= cw1200_wow_resume,
+#endif
 	/* Intentionally not offloaded:					*/
 	/*.channel_switch	= cw1200_channel_switch,		*/
 	/*.remain_on_channel	= cw1200_remain_on_channel,		*/
 	/*.cancel_remain_on_channel = cw1200_cancel_remain_on_channel,	*/
 };
 
-int cw1200_ba_rx_tids = -1;
-int cw1200_ba_tx_tids = -1;
+static int cw1200_ba_rx_tids = -1;
+static int cw1200_ba_tx_tids = -1;
 module_param(cw1200_ba_rx_tids, int, 0644);
 module_param(cw1200_ba_tx_tids, int, 0644);
 MODULE_PARM_DESC(cw1200_ba_rx_tids, "Block ACK RX TIDs");
 MODULE_PARM_DESC(cw1200_ba_tx_tids, "Block ACK TX TIDs");
+
+#ifdef CONFIG_PM
+static const struct wiphy_wowlan_support cw1200_wowlan_support = {
+	/* Support only for limited wowlan functionalities */
+	.flags = WIPHY_WOWLAN_ANY | WIPHY_WOWLAN_DISCONNECT,
+};
+#endif
+
 
 static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 						const bool have_5ghz)
@@ -283,7 +287,7 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 		    IEEE80211_HW_CONNECTION_MONITOR |
 		    IEEE80211_HW_AMPDU_AGGREGATION |
 		    IEEE80211_HW_TX_AMPDU_SETUP_IN_HW |
-		    IEEE80211_HW_NEED_DTIM_PERIOD;
+		    IEEE80211_HW_NEED_DTIM_BEFORE_ASSOC;
 
 	hw->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
 					  BIT(NL80211_IFTYPE_ADHOC) |
@@ -292,10 +296,9 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 					  BIT(NL80211_IFTYPE_P2P_CLIENT) |
 					  BIT(NL80211_IFTYPE_P2P_GO);
 
-	/* Support only for limited wowlan functionalities */
-	hw->wiphy->wowlan.flags = WIPHY_WOWLAN_ANY |
-		WIPHY_WOWLAN_DISCONNECT;
-	hw->wiphy->wowlan.n_patterns = 0;
+#ifdef CONFIG_PM
+	hw->wiphy->wowlan = &cw1200_wowlan_support;
+#endif
 
 	hw->wiphy->flags |= WIPHY_FLAG_AP_UAPSD;
 
@@ -414,29 +417,25 @@ static int cw1200_register_common(struct ieee80211_hw *dev)
 	struct cw1200_common *priv = dev->priv;
 	int err;
 
-#ifdef CONFIG_CW1200_ETF
-	if (etf_mode)
-		goto done;
-#endif
-
+#ifdef CONFIG_PM
 	err = cw1200_pm_init(&priv->pm_state, priv);
 	if (err) {
 		pr_err("Cannot init PM. (%d).\n",
 		       err);
 		return err;
 	}
+#endif
 
 	err = ieee80211_register_hw(dev);
 	if (err) {
 		pr_err("Cannot register device (%d).\n",
 		       err);
+#ifdef CONFIG_PM
 		cw1200_pm_deinit(&priv->pm_state);
+#endif
 		return err;
 	}
 
-#ifdef CONFIG_CW1200_ETF
-done:
-#endif
 	cw1200_debug_init(priv);
 
 	pr_info("Registered as '%s'\n", wiphy_name(dev->wiphy));
@@ -453,13 +452,7 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 	struct cw1200_common *priv = dev->priv;
 	int i;
 
-#ifdef CONFIG_CW1200_ETF
-	if (!etf_mode) {
-#endif
-		ieee80211_unregister_hw(dev);
-#ifdef CONFIG_CW1200_ETF
-	}
-#endif
+	ieee80211_unregister_hw(dev);
 
 	del_timer_sync(&priv->mcast_timeout);
 	cw1200_unregister_bh(priv);
@@ -482,7 +475,9 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 		cw1200_queue_deinit(&priv->tx_queue[i]);
 
 	cw1200_queue_stats_deinit(&priv->tx_queue_stats);
+#ifdef CONFIG_PM
 	cw1200_pm_deinit(&priv->pm_state);
+#endif
 }
 
 /* Clock is in KHz */
@@ -512,7 +507,8 @@ u32 cw1200_dpll_from_clk(u16 clk_khz)
 	case 0xCB20: /* 52000 KHz */
 		return 0x07627091;
 	default:
-		pr_err("Unknown Refclk freq (0x%04x), using 2600KHz\n", clk_khz);
+		pr_err("Unknown Refclk freq (0x%04x), using 26000KHz\n",
+		       clk_khz);
 		return 0x0EC4F121;
 	}
 }
@@ -557,11 +553,6 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	if (err)
 		goto err1;
 
-#ifdef CONFIG_CW1200_ETF
-	if (etf_mode)
-		goto skip_fw;
-#endif
-
 	err = cw1200_load_firmware(priv);
 	if (err)
 		goto err2;
@@ -583,9 +574,6 @@ int cw1200_core_probe(const struct sbus_ops *sbus_ops,
 	/* Enable multi-TX confirmation */
 	wsm_use_multi_tx_conf(priv, true);
 
-#ifdef CONFIG_CW1200_ETF
-skip_fw:
-#endif
 	err = cw1200_register_common(dev);
 	if (err)
 		goto err2;
