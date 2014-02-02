@@ -663,6 +663,9 @@ static int cw1200_bh(void *arg)
 			break;
 	}
 #endif
+		// VLAD: waking up SoC reset and restart sequence
+				priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
+		    	wake_up_interruptible(&priv->cw1200_fw_wq);
 	}
 	return 0;
 }

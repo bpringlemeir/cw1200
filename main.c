@@ -56,8 +56,9 @@ MODULE_PARM_DESC(cw1200_sdd_path, "Override platform_data SDD file");
 static int cw1200_refclk;
 module_param(cw1200_refclk, int, 0644);
 MODULE_PARM_DESC(cw1200_refclk, "Override platform_data reference clock");
-
-int cw1200_power_mode = wsm_power_mode_quiescent;
+// VLAD:
+//int cw1200_power_mode = wsm_power_mode_quiescent;
+int cw1200_power_mode = wsm_power_mode_active;
 module_param(cw1200_power_mode, int, 0644);
 MODULE_PARM_DESC(cw1200_power_mode, "WSM power mode.  0 == active, 1 == doze, 2 == quiescent (default)");
 
@@ -67,7 +68,7 @@ MODULE_PARM_DESC(cw1200_power_mode, "WSM power mode.  0 == active, 1 == doze, 2 
 		.hw_value	= (_rateid),		\
 		.flags		= (_flags),		\
 	}
-
+// VLAD: down tuning
 static struct ieee80211_rate cw1200_rates[] = {
 	RATETAB_ENT(10,  0,   0),
 	RATETAB_ENT(20,  1,   0),
@@ -269,7 +270,9 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	priv->hw_type = -1;
 	priv->mode = NL80211_IFTYPE_UNSPECIFIED;
 	priv->rates = cw1200_rates; /* TODO: fetch from FW */
+
 	priv->mcs_rates = cw1200_n_rates;
+
 	if (cw1200_ba_rx_tids != -1)
 		priv->ba_rx_tid_mask = cw1200_ba_rx_tids;
 	else
@@ -466,7 +469,7 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 	destroy_workqueue(priv->workqueue);
 	priv->workqueue = NULL;
 
-	if (priv->sdd) {
+	if (priv->sdd && !priv->fixed_sdd) {
 		release_firmware(priv->sdd);
 		priv->sdd = NULL;
 	}

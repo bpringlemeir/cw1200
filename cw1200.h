@@ -69,6 +69,15 @@ struct cw1200_ht_info {
 	u16                             operation_mode;
 };
 
+enum cw1200_fw_error_status {
+    CW1200_FW_ERR_IDLE = 0,
+    CW1200_FW_ERR_DOALARM,
+    CW1200_FW_ERR_DORESET,
+    CW1200_FW_ERR_DOTERMINATE,
+    CW1200_FW_ERR_TERMINATED,
+};
+
+
 /* Please keep order */
 enum cw1200_join_status {
 	CW1200_JOIN_STATUS_PASSIVE = 0,
@@ -301,6 +310,11 @@ struct cw1200_common {
 #ifdef CONFIG_CW1200_ETF
 	struct sk_buff_head etf_q;
 #endif
+
+	// VLAD:
+		struct work_struct cw1200_fw_failure_work;
+		wait_queue_head_t cw1200_fw_wq;
+		int cw1200_fw_error_status;
 };
 
 struct cw1200_sta_priv {
