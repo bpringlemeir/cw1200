@@ -141,8 +141,9 @@ void cw1200_stop(struct ieee80211_hw *dev)
 	wsm_unlock_tx(priv);
 	atomic_xchg(&priv->tx_lock, 0); /* for recovery to work */
 }
-
-static int cw1200_bssloss_mitigation = 1;
+// VLAD:
+//static int cw1200_bssloss_mitigation = 1;
+static int cw1200_bssloss_mitigation = 0;
 module_param(cw1200_bssloss_mitigation, int, 0644);
 MODULE_PARM_DESC(cw1200_bssloss_mitigation, "BSS Loss mitigation. 0 == disabled, 1 == enabled (default)");
 
