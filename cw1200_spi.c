@@ -52,7 +52,7 @@ struct sbus_priv {
 	int claimed;
 	// VLAD:
 		spinlock_t      fw_reset_lock;
-		int suspended;
+		int manually_suspended;
 
 };
 
@@ -471,12 +471,12 @@ static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
 
-	if(self->suspended) {
+	if(self->manually_suspended) {
      dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
      return 0;
 	}
 
-	self->suspended = 1;
+
 	dev_info(&cw1200_spi_dev->dev,"%s() \n",__func__);
 
 	 if(self) {
@@ -507,12 +507,11 @@ static int cw1200_spi_resume(struct spi_device *spi_dev)
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
 
-    if(0 == self->suspended) {
-        dev_dbg(&cw1200_spi_dev->dev,"%s() already resumed \n",__func__);
+    if(self->manually_suspended) {
+        dev_dbg(&cw1200_spi_dev->dev,"%s() skipped resume \n",__func__);
         return 0;
 
     }
-    self->suspended = 0;
 
 	if (reset || powerup)
 		msleep(10); /* Settle time? */
@@ -548,7 +547,7 @@ static void cw1200_fw_failure_job(struct work_struct *work)
  struct sbus_priv *self;
 
 
- evt.event = 0xDEAD;
+ evt.event = 0;
 
  status = wait_event_interruptible(cw1200_fw_wq,CW1200_FW_ERR_IDLE != cw1200_fw_error_status);
  if(status < 0 ) {
@@ -644,10 +643,16 @@ static ssize_t cw1200_do_reset(struct device *dev,
   }
  } else if(!strcmp(buf,"SUSPEND\n")) {
 	 dev_dbg(&cw1200_spi_dev->dev,"%s() SUSPEND received \n",__func__);
+	 if( 0 == self->manually_suspended ) {
 	  cw1200_spi_suspend(cw1200_spi_dev,evt);
+      self->manually_suspended = 1;
+	 }
  } else if(!strcmp(buf,"RESUME\n")) {
 	  dev_dbg(&cw1200_spi_dev->dev,"%s() RESUME received \n",__func__);
-	  cw1200_spi_resume(cw1200_spi_dev);
+	  if(self->manually_suspended) {
+	   self->manually_suspended = 0;
+	   cw1200_spi_resume(cw1200_spi_dev);
+	  }
  } else {
 	 return -EACCES;
  }
@@ -705,7 +710,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 		pr_err("Can't allocate SPI sbus_priv.");
 		return -ENOMEM;
 	}
-    self->suspended = 0;
+    self->manually_suspended = 0;
 	self->pdata = plat_data;
 	self->func = func;
 	spin_lock_init(&self->lock);
