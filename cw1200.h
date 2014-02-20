@@ -311,11 +311,13 @@ struct cw1200_common {
 	struct sk_buff_head etf_q;
 #endif
 
-	// VLAD:
-		struct work_struct cw1200_fw_failure_work;
-		wait_queue_head_t cw1200_fw_wq;
-		int cw1200_fw_error_status;
+
 };
+
+// VLAD:
+	extern struct work_struct cw1200_fw_failure_work;
+	extern wait_queue_head_t cw1200_fw_wq;
+	extern int cw1200_fw_error_status;
 
 struct cw1200_sta_priv {
 	int link_id;
