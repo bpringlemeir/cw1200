@@ -38,6 +38,8 @@ MODULE_ALIAS("spi:cw1200_wlan_spi");
 struct work_struct cw1200_fw_failure_work;
 wait_queue_head_t cw1200_fw_wq;
 int cw1200_fw_error_status;
+EXPORT_SYMBOL(cw1200_fw_error_status);
+EXPORT_SYMBOL(cw1200_fw_wq);
 
 static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static int cw1200_fw_reset_cnt = 0;
