@@ -552,17 +552,18 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 {
  int status;
  pm_message_t evt;
- struct sbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
-
+ struct sbus_priv *self;
+ struct cw1200_common *priv =
+		container_of(work, struct cw1200_common, cw1200_fw_failure_work);
 
  evt.event = 0;
 
- status = wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_IDLE != self->core->cw1200_fw_error_status);
+ status = wait_event_interruptible(priv->cw1200_fw_wq,CW1200_FW_ERR_IDLE != priv->cw1200_fw_error_status);
  if(status < 0 ) {
 
   dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw failure %d",__func__,status);
 
- } else if (CW1200_FW_ERR_DOALARM == self->core->cw1200_fw_error_status) {
+ } else if (CW1200_FW_ERR_DOALARM == priv->cw1200_fw_error_status) {
   if(cw1200_fwio_dev) { /* sending mdev event to initiate user-space driven wifi reset sequence */
     dev_info(&cw1200_spi_dev->dev,"cw1200 firmware exception detected, preparing to reset\n");
     platform_driver_unregister(&cw1200_fwio_driver);
@@ -570,29 +571,29 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 	platform_device_unregister(cw1200_fwio_dev);
 	cw1200_fwio_dev = NULL;
 
-    status = wait_event_interruptible_timeout(self->core->cw1200_fw_wq,self->core->cw1200_fw_error_status > CW1200_FW_ERR_DOALARM,HZ*60*5);
+    status = wait_event_interruptible_timeout(priv->cw1200_fw_wq,priv->cw1200_fw_error_status > CW1200_FW_ERR_DOALARM,HZ*60*5);
     if(status < 0 ) {
      dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw reset command %d",__func__,status);
      goto terminate;
     } else if(0 == status) { /* timeout*/
      dev_err(&cw1200_spi_dev->dev,"cw1200 reset fw command timeout\n");
      goto terminate;
-    } else if( CW1200_FW_ERR_DORESET == self->core->cw1200_fw_error_status) {
+    } else if( CW1200_FW_ERR_DORESET == priv->cw1200_fw_error_status) {
      dev_info(&cw1200_spi_dev->dev,"executing cw1200 firmware reset\n");
      cw1200_fw_reset_cnt++;
      cw1200_spi_suspend(cw1200_spi_dev,evt);
      msleep_interruptible(200);
      cw1200_spi_resume(cw1200_spi_dev);
-    } else if (CW1200_FW_ERR_DOTERMINATE ==  self->core->cw1200_fw_error_status) {
+    } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
     	   goto terminate;
     } else goto oops;
   }
- } else if (CW1200_FW_ERR_DORESET ==  self->core->cw1200_fw_error_status) {
+ } else if (CW1200_FW_ERR_DORESET ==  priv->cw1200_fw_error_status) {
      dev_info(&cw1200_spi_dev->dev,"external request to reset cw1200 firmware received\n");
      cw1200_spi_suspend(cw1200_spi_dev,evt);
      msleep_interruptible(200);
      cw1200_spi_resume(cw1200_spi_dev);
- } else if (CW1200_FW_ERR_DOTERMINATE ==  self->core->cw1200_fw_error_status) {
+ } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
    goto terminate;
  } else goto oops;
  self = spi_get_drvdata(cw1200_spi_dev);
@@ -615,11 +616,11 @@ static void cw1200_fw_failure_job(struct work_struct *work)
  queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
  return;
 oops:
- dev_err(&cw1200_spi_dev->dev,"%s() unexpected event: %d\n",__func__,self->core->cw1200_fw_error_status);
+ dev_err(&cw1200_spi_dev->dev,"%s() unexpected event: %d\n",__func__,priv->cw1200_fw_error_status);
 terminate:
  dev_info(&cw1200_spi_dev->dev,"%s() termination \n",__func__);
- self->core->cw1200_fw_error_status = CW1200_FW_ERR_TERMINATED;
- wake_up_interruptible(&self->core->cw1200_fw_wq);
+ priv->cw1200_fw_error_status = CW1200_FW_ERR_TERMINATED;
+ wake_up_interruptible(&priv->cw1200_fw_wq);
 }
 
 
