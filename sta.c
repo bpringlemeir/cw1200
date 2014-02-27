@@ -1266,6 +1266,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		wsm_unlock_tx(priv);
 		return;
 	}
+	pr_debug("[STA] %s()\n",__func__);
 
 	if (priv->join_status)
 		cw1200_do_unjoin(priv);
