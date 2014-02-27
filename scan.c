@@ -25,11 +25,19 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	switch (priv->join_status) {
 	case CW1200_JOIN_STATUS_PRE_STA:
 	case CW1200_JOIN_STATUS_JOINING:
+		wiphy_dbg(priv->hw->wiphy, "[SCAN] BUSY because of status: %d\n",priv->join_status);
+		priv->cw1200_scan_failed++;
+		if( 1 == priv->cw1200_scan_failed) {
+			wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
+			// VLAD: waking up SoC reset and restart sequence
+			priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
+            wake_up_interruptible(&priv->cw1200_fw_wq);
+		}
 		return -EBUSY;
 	default:
 		break;
 	}
-
+	priv->cw1200_scan_failed = 0;
 	wiphy_dbg(priv->hw->wiphy, "[SCAN] hw req, type %d, %d channels, flags: 0x%x.\n",
 		  scan->type, scan->num_channels, scan->flags);
 

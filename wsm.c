@@ -1148,6 +1148,7 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 
 			/* Kill BH thread to report the error to the top layer. */
 			atomic_add(1, &priv->bh_term);
+			priv->bh_error = 1;
 			wake_up(&priv->bh_wq);
 			ret = -ETIMEDOUT;
 		}

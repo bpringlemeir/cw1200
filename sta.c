@@ -255,7 +255,7 @@ void cw1200_remove_interface(struct ieee80211_hw *dev,
 		.reset_statistics = true,
 	};
 	int i;
-
+	pr_debug("[STA] %s()\n", __func__);
 	mutex_lock(&priv->conf_mutex);
 	switch (priv->join_status) {
 	case CW1200_JOIN_STATUS_JOINING:
@@ -1431,7 +1431,7 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 
 	if (atomic_read(&priv->scan.in_progress)) {
 		if (priv->delayed_unjoin)
-			wiphy_dbg(priv->hw->wiphy, "Delayed unjoin is already scheduled.\n");
+			pr_debug("[STA] %s() Delayed unjoin is already scheduled.\n",__func__);
 		else
 			priv->delayed_unjoin = true;
 		goto done;
@@ -1483,7 +1483,7 @@ void cw1200_unjoin_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
-
+	pr_debug("[STA] %s()\n",__func__);
 	cw1200_do_unjoin(priv);
 
 	/* Tell the stack we're dead */

@@ -315,6 +315,7 @@ struct cw1200_common {
 		struct work_struct cw1200_fw_failure_work;
 		wait_queue_head_t cw1200_fw_wq;
 		int cw1200_fw_error_status;
+		int cw1200_scan_failed;
 };
 
 struct cw1200_sta_priv {

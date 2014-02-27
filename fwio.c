@@ -325,6 +325,7 @@ int cw1200_load_firmware(struct cw1200_common *priv)
 		goto out;
 	}
 
+
 	if (val32 == 0 || val32 == 0xffffffff) {
 		pr_err("Bad config register value (0x%08x)\n", val32);
 		ret = -EIO;
@@ -519,14 +520,12 @@ int cw1200_load_firmware(struct cw1200_common *priv)
 	/* Unless we read the CONFIG Register we are
 	 * not able to get an interrupt
 	 */
-	printk(KERN_CRIT"VLAD: %s 1\n",__func__);
 // VLAD:
 //	mdelay(10);
 	mdelay(100);
 	config_reg_read(priv, &val32);
 
 out:
-    printk(KERN_CRIT"VLAD: %s 2\n",__func__);
 	return ret;
 
 unsubscribe:
