@@ -209,6 +209,7 @@ struct cw1200_common {
 	atomic_t			bh_tx;
 	atomic_t			bh_term;
 	atomic_t			bh_suspend;
+	atomic_t			hw_bufs_used;
 
 #ifdef CW1200_USE_COMPAT_KTHREAD
 	struct task_struct              *bh_thread;
@@ -224,7 +225,6 @@ struct cw1200_common {
 	u8				buf_id_rx;
 	u8				wsm_rx_seq;
 	u8				wsm_tx_seq;
-	int				hw_bufs_used;
 	bool				powersave_enabled;
 	bool				device_can_sleep;
 

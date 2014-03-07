@@ -35,6 +35,7 @@ MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SPI driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("spi:cw1200_wlan_spi");
 
+#define SPI_NBS_MAX_BUF_SIZE 2048
 
 static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static int cw1200_fw_reset_cnt = 0;
@@ -46,7 +47,7 @@ struct sbus_priv {
 	const struct cw1200_platform_data_spi *pdata;
 	spinlock_t		lock; /* Serialize all bus operations */
 	wait_queue_head_t       wq;
-	u8 spi_io_buf[2048];
+	u8 spi_io_buf[SPI_NBS_MAX_BUF_SIZE];
 	int claimed;
 	// VLAD:
 		spinlock_t      fw_reset_lock;
@@ -143,6 +144,16 @@ static struct platform_driver cw1200_fwio_driver = {
    B1 B0 B3 B2
 
 */
+/* Mark wrapper data as free to re-use. */
+
+
+#define SPI_MAX_CHUNK_SHIFT 9
+#define SPI_MAX_CHUNK  (1<<SPI_MAX_CHUNK_SHIFT)
+
+static void spi_complete(void *context)
+{
+   udelay(2);
+}
 
 static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
 				     unsigned int addr,
@@ -192,12 +203,12 @@ static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
      }
 
 	} else {
-
+     int counter = 0;
      int n_trans;
      int msg_ofs;
-     struct spi_transfer     t_msg[4];
+     static struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
 
-     if(count > sizeof(self->spi_io_buf))
+     if(count > SPI_NBS_MAX_BUF_SIZE)
     	 return -ENOTSUPP;
 
      memset(t_msg,0,sizeof(t_msg));
@@ -207,16 +218,19 @@ static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
      t_addr.len = sizeof(regaddr);
 
 	 spi_message_init(&m);
+	// VLAD:
+	 m.complete = spi_complete;
+	 m.context = &counter;
 	 spi_message_add_tail(&t_addr, &m);
 
-	 n_trans = (count >> 9) + (count&511?1:0);
+	 n_trans = (count >> SPI_MAX_CHUNK_SHIFT) + (count&(SPI_MAX_CHUNK-1)?1:0);
 
 	 if(n_trans > sizeof(t_msg)/sizeof(t_msg[0]))
 		 return -ENOTSUPP;
 
-	 for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=512) {
+	 for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=SPI_MAX_CHUNK) {
        t_msg[i].rx_buf = &self->spi_io_buf[msg_ofs];
-       t_msg[i].len = ( (count - (i<<9) ) >> 9 ) ? 512 : (count&511) ;
+       t_msg[i].len = ( (count - (i<<SPI_MAX_CHUNK_SHIFT) ) >> SPI_MAX_CHUNK_SHIFT ) ? SPI_MAX_CHUNK : (count&(SPI_MAX_CHUNK-1)) ;
        spi_message_add_tail(&t_msg[i], &m);
 	 }
 
@@ -276,12 +290,12 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
 		 spi_message_add_tail(&t_addr, &m);
 		 rval = spi_async_locked(self->func, &m);
 	} else {
-
+      int counter = 0;
       int n_trans;
       int msg_ofs;
-      struct spi_transfer     t_msg[4];
+      static struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
 
-      if(count > sizeof(self->spi_io_buf))
+      if(count > SPI_NBS_MAX_BUF_SIZE)
     	 return -ENOTSUPP;
 
       memset(t_msg,0,sizeof(t_msg));
@@ -291,9 +305,12 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
       t_addr.len = sizeof(regaddr);
 
  	  spi_message_init(&m);
+ 	  // VLAD:
+ 	  m.complete = spi_complete;
+ 	  m.context = &counter;
  	  spi_message_add_tail(&t_addr, &m);
 
- 	  n_trans = (count >> 9) + (count&511?1:0);
+ 	  n_trans = (count >> SPI_MAX_CHUNK_SHIFT) + (count&(SPI_MAX_CHUNK-1)?1:0);
 
  	  if(n_trans > sizeof(t_msg)/sizeof(t_msg[0]))
  		 return -ENOTSUPP;
@@ -302,9 +319,9 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
         ((u16*)self->spi_io_buf)[i] = swab16( ((u16*)src)[i]);
  	  }
 
-   	  for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=512) {
+   	  for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=SPI_MAX_CHUNK) {
         t_msg[i].tx_buf = &self->spi_io_buf[msg_ofs];
-        t_msg[i].len = ( (count - (i<<9) ) >> 9 ) ? 512 : (count&511) ;
+        t_msg[i].len = ( (count - (i<<SPI_MAX_CHUNK_SHIFT) ) >> SPI_MAX_CHUNK_SHIFT ) ? SPI_MAX_CHUNK : (count&(SPI_MAX_CHUNK-1)) ;
         spi_message_add_tail(&t_msg[i], &m);
  	  }
 
