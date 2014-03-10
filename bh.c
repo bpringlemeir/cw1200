@@ -49,22 +49,16 @@ enum cw1200_bh_pm_state {
 typedef int (*cw1200_wsm_handler)(struct cw1200_common *priv,
 	u8 *data, size_t size);
 
-#ifndef CW1200_USE_COMPAT_KTHREAD
 static void cw1200_bh_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 	container_of(work, struct cw1200_common, bh_work);
 	cw1200_bh(priv);
 }
-#endif
 
 int cw1200_register_bh(struct cw1200_common *priv)
 {
 	int err = 0;
-#ifdef CW1200_USE_COMPAT_KTHREAD
-	struct sched_param param = { .sched_priority = 1 };
-	BUG_ON(priv->bh_thread);
-#else
 	/* Realtime workqueue */
 /*
 	priv->bh_workqueue = alloc_workqueue("cw1200_bh",
@@ -77,7 +71,6 @@ int cw1200_register_bh(struct cw1200_common *priv)
 		return -ENOMEM;
 
 	INIT_WORK(&priv->bh_work, cw1200_bh_work);
-#endif
 
 	pr_debug("[BH] register.\n");
 
@@ -92,43 +85,20 @@ int cw1200_register_bh(struct cw1200_common *priv)
 	init_waitqueue_head(&priv->bh_wq);
 	init_waitqueue_head(&priv->bh_evt_wq);
 
-#ifdef CW1200_USE_COMPAT_KTHREAD
-	priv->bh_thread = kthread_create(&cw1200_bh, priv, "cw1200_bh");
-	if (IS_ERR(priv->bh_thread)) {
-		err = PTR_ERR(priv->bh_thread);
-		priv->bh_thread = NULL;
-	} else {
-		WARN_ON(sched_setscheduler(priv->bh_thread,
-					   SCHED_FIFO, &param));
-		wake_up_process(priv->bh_thread);
-	}
-#else
 	err = !queue_work(priv->bh_workqueue, &priv->bh_work);
 	WARN_ON(err);
-#endif
 	return err;
 }
 
 void cw1200_unregister_bh(struct cw1200_common *priv)
 {
-#ifdef CW1200_USE_COMPAT_KTHREAD
-	struct task_struct *thread = priv->bh_thread;
-	if (WARN_ON(!thread))
-		return;
-#endif
-
 	atomic_add(1, &priv->bh_term);
 	wake_up(&priv->bh_wq);
 
-#ifdef CW1200_USE_COMPAT_KTHREAD
-	kthread_stop(thread);
-	priv->bh_thread = NULL;
-#else
 	flush_workqueue(priv->bh_workqueue);
 
 	destroy_workqueue(priv->bh_workqueue);
 	priv->bh_workqueue = NULL;
-#endif
 
 	pr_debug("[BH] unregistered.\n");
 }
@@ -266,7 +236,8 @@ static int cw1200_bh_rx_helper(struct cw1200_common *priv,
 	}
 
 	/* Add SIZE of PIGGYBACK reg (CONTROL Reg)
-	 * to the NEXT Message length + 2 Bytes for SKB */
+	 * to the NEXT Message length + 2 Bytes for SKB
+	 */
 	read_len = read_len + 2;
 
 	alloc_len = priv->hwbus_ops->align_size(
@@ -468,8 +439,8 @@ static int cw1200_bh(void *arg)
 				(rx || tx || term || suspend || priv->bh_error);
 			}), status);
 
-		pr_debug("[BH] - rx: %d, tx: %d, term: %d, suspend: %d, status: %ld\n",
-			 rx, tx, term, suspend, status);
+		pr_debug("[BH] - rx: %d, tx: %d, term: %d, bh_err: %d, suspend: %d, status: %ld\n",
+			 rx, tx, term, suspend, priv->bh_error, status);
 
 		/* Did an error occur? */
 		if ((status < 0 && status != -ERESTARTSYS) ||
@@ -618,16 +589,6 @@ static int cw1200_bh(void *arg)
 		pr_err("[BH] Fatal error, exiting.\n");
 		priv->bh_error = 1;
 		/* TODO: schedule_work(recovery) */
-#ifdef CW1200_USE_COMPAT_KTHREAD
-		for (;;) {
-			int status = wait_event_interruptible(priv->bh_wq, ({
-				term = atomic_xchg(&priv->bh_term, 0);
-				(term);
-			}));
-		if (status || term)
-			break;
-	}
-#endif
 		// VLAD: waking up SoC reset and restart sequence
 				priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
 		    	wake_up_interruptible(&priv->cw1200_fw_wq);

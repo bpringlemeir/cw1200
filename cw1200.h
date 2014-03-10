@@ -29,10 +29,6 @@
 #include "scan.h"
 #include "txrx.h"
 #include "pm.h"
-// VLAD: does not compile, because WQ_MEM_RECLAIM was introduced in 2.6.38 kernel
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36))
-#define CW1200_USE_COMPAT_KTHREAD
-#endif
 
 /* Forward declarations */
 struct hwbus_ops;
@@ -206,12 +202,8 @@ struct cw1200_common {
 	atomic_t			bh_suspend;
 	atomic_t			hw_bufs_used;
 
-#ifdef CW1200_USE_COMPAT_KTHREAD
-	struct task_struct              *bh_thread;
-#else
 	struct workqueue_struct         *bh_workqueue;
 	struct work_struct              bh_work;
-#endif
 
 	int				bh_error;
 	wait_queue_head_t		bh_wq;
@@ -286,7 +278,7 @@ struct cw1200_common {
 	struct delayed_work	bss_loss_work;
 	spinlock_t		bss_loss_lock; /* Protect BSS loss state */
 	int                     bss_loss_state;
-	int                     bss_loss_confirm_id;
+	u32                     bss_loss_confirm_id;
 	int			delayed_link_loss;
 	struct work_struct	bss_params_work;
 
