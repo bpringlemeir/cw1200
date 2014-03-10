@@ -9,12 +9,10 @@ cw1200_core-y := \
 		sta.o \
 		scan.o \
 		debug.o \
-		cw1200_fw_bin.o \
-		#		pm.o \
+		cw1200_fw_bin.o
+#cw1200_core-$(CONFIG_PM)	+= pm.o
 
 EXTRA_AFLAGS := -Xassembler -I$(srctree)/$(src)
-		
-cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
 
 #CFLAGS_wsm.o += -DDEBUG
 #CFLAGS_sta.o += -DDEBUG
