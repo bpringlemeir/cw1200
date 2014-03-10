@@ -446,18 +446,6 @@ static int cw1200_spi_pm(struct hwbus_priv *self, bool suspend)
 	return irq_set_irq_wake(self->func->irq, suspend);
 }
 
-static void cw1200_spi_irq_enable(struct hwbus_priv *self,int enable)
-{
-
-
-  if(enable) {
-	  enable_irq(self->func->irq);
-  } else {
-	  disable_irq(self->func->irq);
-  }
-
-}
-
 static struct hwbus_ops cw1200_spi_hwbus_ops = {
 	.hwbus_memcpy_fromio	= cw1200_spi_memcpy_fromio,
 	.hwbus_memcpy_toio	= cw1200_spi_memcpy_toio,
@@ -465,7 +453,6 @@ static struct hwbus_ops cw1200_spi_hwbus_ops = {
 	.unlock			= cw1200_spi_unlock,
 	.align_size		= cw1200_spi_align_size,
 	.power_mgmt		= cw1200_spi_pm,
-	.irq_enable     = cw1200_spi_irq_enable,
 };
 
 
