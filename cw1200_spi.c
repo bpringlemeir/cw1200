@@ -25,7 +25,7 @@
 #include <linux/device.h>
 
 #include "cw1200.h"
-#include "sbus.h"
+#include "hwbus.h"
 #include <linux/cw1200_platform.h>
 
 #include "hwio.h"
@@ -40,7 +40,7 @@ static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static int cw1200_fw_reset_cnt = 0;
 /* #define SPI_DEBUG */
 static struct spi_device *cw1200_spi_dev;
-struct sbus_priv {
+struct hwbus_priv {
 	struct spi_device	*func;
 	struct cw1200_common	*core;
 	const struct cw1200_platform_data_spi *pdata;
@@ -57,7 +57,7 @@ static struct platform_device *cw1200_fwio_dev;
 static void cw1200_fw_failure_job(struct work_struct *work);
 static int cw1200_fwio_prepare(struct device *dev)
 {
-  struct sbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
+  struct hwbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
 
   if(self->manually_suspended) {
 	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
@@ -75,7 +75,7 @@ static int cw1200_fwio_prepare(struct device *dev)
 
 static void cw1200_fwio_complete(struct device *dev)
 {
-	struct sbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
+	struct hwbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
 
   if(self->manually_suspended) {
 	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
@@ -132,18 +132,16 @@ static struct platform_driver cw1200_fwio_driver = {
 #define SET_WRITE 0x7FFF /* usage: and operation */
 #define SET_READ 0x8000  /* usage: or operation */
 
-/*
-   Notes on byte ordering:
+/* Notes on byte ordering:
    LE:  B0 B1 B2 B3
    BE:  B3 B2 B1 B0
 
    Hardware expects 32-bit data to be written as 16-bit BE words:
 
    B1 B0 B3 B2
-
 */
 
-static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
+static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 				     unsigned int addr,
 				     void *dst, int count)
 {
@@ -204,7 +202,7 @@ static int cw1200_spi_memcpy_fromio(struct sbus_priv *self,
 	return ret;
 }
 
-static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
+static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 				   unsigned int addr,
 				   const void *src, int count)
 {
@@ -272,7 +270,7 @@ static int cw1200_spi_memcpy_toio(struct sbus_priv *self,
 	return rval;
 }
 
-static void cw1200_spi_lock(struct sbus_priv *self)
+static void cw1200_spi_lock(struct hwbus_priv *self)
 {
 	unsigned long flags;
 
@@ -298,7 +296,7 @@ static void cw1200_spi_lock(struct sbus_priv *self)
 	return;
 }
 
-static void cw1200_spi_unlock(struct sbus_priv *self)
+static void cw1200_spi_unlock(struct hwbus_priv *self)
 {
 	unsigned long flags;
 
@@ -312,7 +310,7 @@ static void cw1200_spi_unlock(struct sbus_priv *self)
 
 static irqreturn_t cw1200_spi_irq_handler(int irq, void *dev_id)
 {
-	struct sbus_priv *self = dev_id;
+	struct hwbus_priv *self = dev_id;
 
 	if (self->core) {
 		cw1200_spi_lock(self);
@@ -324,7 +322,7 @@ static irqreturn_t cw1200_spi_irq_handler(int irq, void *dev_id)
 	}
 }
 
-static int cw1200_spi_irq_subscribe(struct sbus_priv *self)
+static int cw1200_spi_irq_subscribe(struct hwbus_priv *self)
 {
 	int ret;
 
@@ -349,7 +347,7 @@ exit:
 	return ret;
 }
 
-static int cw1200_spi_irq_unsubscribe(struct sbus_priv *self)
+static int cw1200_spi_irq_unsubscribe(struct hwbus_priv *self)
 {
 	int ret = 0;
 
@@ -376,7 +374,6 @@ static int cw1200_spi_off(const struct cw1200_platform_data_spi *pdata)
 		gpio_free(powerup->start);
 
 	}
-
 
 	if (pdata->power_ctrl)
 		pdata->power_ctrl(pdata, false);
@@ -439,17 +436,17 @@ static int cw1200_spi_on(const struct cw1200_platform_data_spi *pdata)
 	return 0;
 }
 
-static size_t cw1200_spi_align_size(struct sbus_priv *self, size_t size)
+static size_t cw1200_spi_align_size(struct hwbus_priv *self, size_t size)
 {
 	return size & 1 ? size + 1 : size;
 }
 
-static int cw1200_spi_pm(struct sbus_priv *self, bool suspend)
+static int cw1200_spi_pm(struct hwbus_priv *self, bool suspend)
 {
 	return irq_set_irq_wake(self->func->irq, suspend);
 }
 
-static void cw1200_spi_irq_enable(struct sbus_priv *self,int enable)
+static void cw1200_spi_irq_enable(struct hwbus_priv *self,int enable)
 {
 
 
@@ -461,9 +458,9 @@ static void cw1200_spi_irq_enable(struct sbus_priv *self,int enable)
 
 }
 
-static struct sbus_ops cw1200_spi_sbus_ops = {
-	.sbus_memcpy_fromio	= cw1200_spi_memcpy_fromio,
-	.sbus_memcpy_toio	= cw1200_spi_memcpy_toio,
+static struct hwbus_ops cw1200_spi_hwbus_ops = {
+	.hwbus_memcpy_fromio	= cw1200_spi_memcpy_fromio,
+	.hwbus_memcpy_toio	= cw1200_spi_memcpy_toio,
 	.lock			= cw1200_spi_lock,
 	.unlock			= cw1200_spi_unlock,
 	.align_size		= cw1200_spi_align_size,
@@ -474,7 +471,7 @@ static struct sbus_ops cw1200_spi_sbus_ops = {
 
 static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 {
-	struct sbus_priv *self = spi_get_drvdata(spi_dev);
+	struct hwbus_priv *self = spi_get_drvdata(spi_dev);
 	const struct cw1200_platform_data_spi *pdata = cw1200_get_platform_data();
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
@@ -510,7 +507,7 @@ static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 
 static int cw1200_spi_resume(struct spi_device *spi_dev)
 {
-	struct sbus_priv *self = spi_get_drvdata(spi_dev);
+	struct hwbus_priv *self = spi_get_drvdata(spi_dev);
 	const struct cw1200_platform_data_spi *pdata = cw1200_get_platform_data();
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
@@ -538,7 +535,7 @@ static int cw1200_spi_resume(struct spi_device *spi_dev)
 	 dev_info(&cw1200_spi_dev->dev,"%s() \n",__func__);
 
 	cw1200_spi_irq_subscribe(self);
-	cw1200_core_probe(&cw1200_spi_sbus_ops,
+	cw1200_core_probe(&cw1200_spi_hwbus_ops,
 					   self, &self->func->dev, &self->core,
 					   self->pdata->ref_clk,
 					   self->pdata->macaddr,
@@ -552,7 +549,7 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 {
  int status;
  pm_message_t evt;
- struct sbus_priv *self;
+ struct hwbus_priv *self;
  struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, cw1200_fw_failure_work);
 
@@ -636,7 +633,7 @@ static ssize_t cw1200_do_reset(struct device *dev,
 				   const char *buf, size_t size)
 {
  pm_message_t evt;
- struct sbus_priv *self = NULL;
+ struct hwbus_priv *self = NULL;
  self = spi_get_drvdata(cw1200_spi_dev);
 
  evt.event = 0;
@@ -679,7 +676,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 {
 	const struct cw1200_platform_data_spi *plat_data = cw1200_get_platform_data();
 //		func->dev.platform_data;
-	struct sbus_priv *self;
+	struct hwbus_priv *self;
 	int status;
 
 	cw1200_fwio_workqueue = create_workqueue("cw1200_fwio_q");
@@ -718,7 +715,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 
 	self = kzalloc(sizeof(*self), GFP_KERNEL);
 	if (!self) {
-		pr_err("Can't allocate SPI sbus_priv.");
+		pr_err("Can't allocate SPI hwbus_priv.");
 		return -ENOMEM;
 	}
     self->manually_suspended = 0;
@@ -732,7 +729,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 
 	status = cw1200_spi_irq_subscribe(self);
 
-	status = cw1200_core_probe(&cw1200_spi_sbus_ops,
+	status = cw1200_core_probe(&cw1200_spi_hwbus_ops,
 				   self, &func->dev, &self->core,
 				   self->pdata->ref_clk,
 				   self->pdata->macaddr,
@@ -775,7 +772,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 /* Disconnect Function to be called by SPI stack when device is disconnected */
 static int cw1200_spi_disconnect(struct spi_device *func)
 {
-	struct sbus_priv *self = spi_get_drvdata(func);
+	struct hwbus_priv *self = spi_get_drvdata(func);
 
 	if (self) {
 		cw1200_spi_irq_unsubscribe(self);
@@ -871,7 +868,7 @@ static int cw1200_debugfs_set_cmd(void *data, u64 val)
    }
  } break;
  case 4: {
-  struct sbus_priv *self = NULL;
+  struct hwbus_priv *self = NULL;
   self = spi_get_drvdata(cw1200_spi_dev);
   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
   wake_up_interruptible(&self->core->cw1200_fw_wq);

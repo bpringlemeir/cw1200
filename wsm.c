@@ -1770,7 +1770,6 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 				 */
 				hdr->frame_control |=
 					cpu_to_le16(IEEE80211_FCTL_MOREDATA);
-
 			}
 
 			pr_debug("[WSM] >>> 0x%.4X (%zu) %p %c\n",

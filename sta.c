@@ -273,7 +273,7 @@ void cw1200_remove_interface(struct ieee80211_hw *dev,
 		.reset_statistics = true,
 	};
 	int i;
-	pr_debug("[STA] %s()\n", __func__);
+
 	mutex_lock(&priv->conf_mutex);
 	switch (priv->join_status) {
 	case CW1200_JOIN_STATUS_JOINING:
@@ -1287,7 +1287,6 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		wsm_unlock_tx(priv);
 		return;
 	}
-	pr_debug("[STA] %s()\n",__func__);
 
 	if (priv->join_status)
 		cw1200_do_unjoin(priv);
@@ -1509,8 +1508,10 @@ void cw1200_unjoin_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
+
 	pr_debug("[STA] %s()\n",__func__);
 	cancel_delayed_work(&priv->join_timeout);
+
 	cw1200_do_unjoin(priv);
 
 	/* Tell the stack we're dead */

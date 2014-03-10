@@ -35,7 +35,7 @@
 #endif
 
 /* Forward declarations */
-struct sbus_ops;
+struct hwbus_ops;
 struct task_struct;
 struct cw1200_debug_priv;
 struct firmware;
@@ -123,8 +123,8 @@ struct cw1200_common {
 	u8 mac_addr[ETH_ALEN];
 
 	/* Hardware interface */
-	const struct sbus_ops		*sbus_ops;
-	struct sbus_priv		*sbus_priv;
+	const struct hwbus_ops		*hwbus_ops;
+	struct hwbus_priv		*hwbus_priv;
 
 	/* Hardware information */
 	enum {
@@ -231,7 +231,8 @@ struct cw1200_common {
 	/* Scan status */
 	struct cw1200_scan scan;
 	/* Keep cw1200 awake (WUP = 1) 1 second after each scan to avoid
-	 * FW issue with sleeping/waking up. */
+	 * FW issue with sleeping/waking up.
+	 */
 	atomic_t			recent_scan;
 	struct delayed_work		clear_recent_scan_work;
 
@@ -323,8 +324,8 @@ struct cw1200_sta_priv {
 };
 
 /* interfaces for the drivers */
-int cw1200_core_probe(const struct sbus_ops *sbus_ops,
-		      struct sbus_priv *sbus,
+int cw1200_core_probe(const struct hwbus_ops *hwbus_ops,
+		      struct hwbus_priv *hwbus,
 		      struct device *pdev,
 		      struct cw1200_common **pself,
 		      int ref_clk, const u8 *macaddr,
