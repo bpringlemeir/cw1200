@@ -549,13 +549,8 @@ void cw1200_set_beacon_wakeup_period_work(struct work_struct *work)
 				     priv->join_dtim_period, 0);
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 			     struct netdev_hw_addr_list *mc_list)
-#else
-u64 cw1200_prepare_multicast(struct ieee80211_hw *hw, int mc_count,
-			     struct dev_addr_list *ha)
-#endif
 {
 	static u8 broadcast_ipv6[ETH_ALEN] = {
 		0x33, 0x33, 0x00, 0x00, 0x00, 0x01
@@ -564,16 +559,13 @@ u64 cw1200_prepare_multicast(struct ieee80211_hw *hw, int mc_count,
 		0x01, 0x00, 0x5e, 0x00, 0x00, 0x01
 	};
 	struct cw1200_common *priv = hw->priv;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 	struct netdev_hw_addr *ha;
-#endif
 	int count = 0;
 
 	/* Disable multicast filtering */
 	priv->has_multicast_subscription = false;
 	memset(&priv->multicast_filter, 0x00, sizeof(priv->multicast_filter));
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 	if (netdev_hw_addr_list_count(mc_list) > WSM_MAX_GRP_ADDRTABLE_ENTRIES)
 		return 0;
 
@@ -587,26 +579,13 @@ u64 cw1200_prepare_multicast(struct ieee80211_hw *hw, int mc_count,
 			priv->has_multicast_subscription = true;
 		count++;
 	}
-#else
-	while (ha &&
-	       count < mc_count &&
-	       count < WSM_MAX_GRP_ADDRTABLE_ENTRIES) {
-		memcpy(&priv->multicast_filter.macaddrs[count],
-		       ha->dmi_addr, ETH_ALEN);
-		if (memcmp(ha->dmi_addr, broadcast_ipv4, ETH_ALEN) &&
-		    memcmp(ha->dmi_addr, broadcast_ipv6, ETH_ALEN))
-			priv->has_multicast_subscription = true;
-		count++;
-		ha = ha->next;
-	}
-#endif
 
 	if (count) {
 		priv->multicast_filter.enable = __cpu_to_le32(1);
 		priv->multicast_filter.num_addrs = __cpu_to_le32(count);
 	}
 
-	return count;
+	return netdev_hw_addr_list_count(mc_list);
 }
 
 void cw1200_configure_filter(struct ieee80211_hw *dev,

@@ -42,13 +42,8 @@ int cw1200_set_rts_threshold(struct ieee80211_hw *hw, u32 value);
 
 void cw1200_flush(struct ieee80211_hw *hw, u32 queues, bool drop);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35))
 u64 cw1200_prepare_multicast(struct ieee80211_hw *hw,
 			     struct netdev_hw_addr_list *mc_list);
-#else
-u64 cw1200_prepare_multicast(struct ieee80211_hw *dev, int mc_count,
-			     struct dev_addr_list *ha);
-#endif
 
 int cw1200_set_pm(struct cw1200_common *priv, const struct wsm_set_pm *arg);
 
