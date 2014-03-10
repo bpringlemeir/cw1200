@@ -143,7 +143,7 @@ void cw1200_stop(struct ieee80211_hw *dev)
 }
 // VLAD:
 //static int cw1200_bssloss_mitigation = 1;
-static int cw1200_bssloss_mitigation = 0;
+static int cw1200_bssloss_mitigation = 1;
 module_param(cw1200_bssloss_mitigation, int, 0644);
 MODULE_PARM_DESC(cw1200_bssloss_mitigation, "BSS Loss mitigation. 0 == disabled, 1 == enabled (default)");
 
@@ -158,7 +158,7 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 	spin_unlock(&priv->bss_loss_lock);
 	cancel_work_sync(&priv->bss_params_work);
 	spin_lock(&priv->bss_loss_lock);
-
+// VLAD:
 	pr_debug("[STA] CQM BSSLOSS_SM: state: %d init %d good %d bad: %d txlock: %d uj: %d\n",
 		 priv->bss_loss_state,
 		 init, good, bad,
@@ -194,6 +194,13 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 		// VLAD:
 		spin_unlock(&priv->bss_loss_lock);
 		cancel_delayed_work_sync(&priv->bss_loss_work);
+		// VLAD: waking up SoC reset and restart sequence
+		if( atomic_read(&priv->tx_lock) > 1 ) {
+         wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
+		 priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
+         wake_up_interruptible(&priv->cw1200_fw_wq);
+		}
+
 		spin_lock(&priv->bss_loss_lock);
 		priv->bss_loss_state = 0;
 	}
@@ -1027,6 +1034,7 @@ void cw1200_event_handler(struct work_struct *work)
 				/* Scan is in progress. Delay reporting.
 				 * Scan complete will trigger bss_loss_work
 				 */
+				pr_debug("[CQM] BSS LOST: scan in progress. Reschedulng bss_loss_work\n");
 				priv->delayed_link_loss = 1;
 				/* Also start a watchdog. */
 				queue_delayed_work(priv->workqueue,
@@ -1937,7 +1945,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	     BSS_CHANGED_IBSS |
 	     BSS_CHANGED_BASIC_RATES |
 	     BSS_CHANGED_HT)) {
-		pr_debug("BSS_CHANGED_ASSOC\n");
+		pr_debug("BSS_CHANGED_ASSOC (%d)\n",info->assoc);
 		if (info->assoc) {
 			if (priv->join_status < CW1200_JOIN_STATUS_PRE_STA) {
 				ieee80211_connection_loss(vif);
