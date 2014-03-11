@@ -27,12 +27,14 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	case CW1200_JOIN_STATUS_JOINING:
 		wiphy_info(priv->hw->wiphy, "[SCAN] BUSY because of status: %d\n",priv->join_status);
 		priv->cw1200_scan_failed++;
+#if 0
 		if( 2 == priv->cw1200_scan_failed) {
 			wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
 			// VLAD: waking up SoC reset and restart sequence
 			priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
             wake_up_interruptible(&priv->cw1200_fw_wq);
 		}
+#endif
 		return -EBUSY;
 	default:
 		break;
@@ -153,6 +155,7 @@ void cw1200_scan_work(struct work_struct *work)
 		 * when STA is joined but not yet associated.
 		 * Force unjoin in this case.
 		 */
+		pr_debug("%s(first_run)\n",__func__);
 		if (cancel_delayed_work_sync(&priv->join_timeout) > 0)
 			cw1200_join_timeout(&priv->join_timeout.work);
 	}

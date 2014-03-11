@@ -16,6 +16,7 @@ EXTRA_AFLAGS := -Xassembler -I$(srctree)/$(src)
 		
 cw1200_core-$(CONFIG_CW1200_ITP)	+= itp.o
 
+#CFLAGS_wsm.o += -DDEBUG
 #CFLAGS_sta.o += -DDEBUG
 #CFLAGS_scan.o += -DDEBUG
 #CFLAGS_cw1200_spi.o += -DDEBUG

@@ -195,12 +195,13 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 		spin_unlock(&priv->bss_loss_lock);
 		cancel_delayed_work_sync(&priv->bss_loss_work);
 		// VLAD: waking up SoC reset and restart sequence
+#if 0
 		if( atomic_read(&priv->tx_lock) > 1 ) {
          wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
 		 priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
          wake_up_interruptible(&priv->cw1200_fw_wq);
 		}
-
+#endif
 		spin_lock(&priv->bss_loss_lock);
 		priv->bss_loss_state = 0;
 	}
@@ -1432,9 +1433,17 @@ void cw1200_join_timeout(struct work_struct *work)
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, join_timeout.work);
 	pr_debug("[WSM] Join timed out.\n");
-	wsm_lock_tx(priv);
-	if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0)
-		wsm_unlock_tx(priv);
+
+// VLAD:
+	if( 0 == atomic_read(&priv->tx_lock))
+	    wsm_lock_tx(priv);
+	if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0) {
+// VLAD:
+// 		wsm_unlock_tx(priv);
+		if( 1 == atomic_read(&priv->tx_lock))
+		    wsm_unlock_tx(priv);
+
+	}
 }
 
 static void cw1200_do_unjoin(struct cw1200_common *priv)
