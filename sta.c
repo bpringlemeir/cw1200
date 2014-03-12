@@ -1429,18 +1429,18 @@ done_put:
 }
 
 void cw1200_join_timeout(struct work_struct *work)
-{
+{   int tx_lock;
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, join_timeout.work);
 	pr_debug("[WSM] Join timed out.\n");
-
+    tx_lock = atomic_read(&priv->tx_lock);
 // VLAD:
-	if( 0 == atomic_read(&priv->tx_lock))
+	if( 0 == tx_lock)
 	    wsm_lock_tx(priv);
 	if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0) {
 // VLAD:
 // 		wsm_unlock_tx(priv);
-		if( 1 == atomic_read(&priv->tx_lock))
+		if( 1 == tx_lock)
 		    wsm_unlock_tx(priv);
 
 	}

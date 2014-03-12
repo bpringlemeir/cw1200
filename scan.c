@@ -25,8 +25,9 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	switch (priv->join_status) {
 	case CW1200_JOIN_STATUS_PRE_STA:
 	case CW1200_JOIN_STATUS_JOINING:
-		wiphy_info(priv->hw->wiphy, "[SCAN] BUSY because of status: %d\n",priv->join_status);
+		wiphy_dbg(priv->hw->wiphy, "[SCAN] BUSY because of status: %d\n",priv->join_status);
 		priv->cw1200_scan_failed++;
+// VLAD: no need to throw exception anymore.
 #if 0
 		if( 2 == priv->cw1200_scan_failed) {
 			wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
