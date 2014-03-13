@@ -158,7 +158,7 @@ void cw1200_scan_work(struct work_struct *work)
 		 */
 		pr_debug("%s(first_run)\n",__func__);
 		if (cancel_delayed_work_sync(&priv->join_timeout) > 0)
-			cw1200_join_timeout(&priv->join_timeout.work);
+			cw1200_join_timeout(&priv->join_timeout.work); /* wsm lock by queuer */
 	}
 
 	mutex_lock(&priv->conf_mutex);

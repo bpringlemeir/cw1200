@@ -1229,6 +1229,8 @@ static void cw1200_join_complete(struct cw1200_common *priv)
 	pr_debug("[STA] Join complete (%d)\n", priv->join_complete_status);
 
 	priv->join_pending = false;
+	cancel_delayed_work_sync(&priv->join_timeout);
+
 	if (priv->join_complete_status) {
 		priv->join_status = CW1200_JOIN_STATUS_PASSIVE;
 		cw1200_update_listening(priv, priv->listening);
@@ -1429,21 +1431,19 @@ done_put:
 }
 
 void cw1200_join_timeout(struct work_struct *work)
-{   int tx_lock;
+{
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, join_timeout.work);
 	pr_debug("[WSM] Join timed out.\n");
-    tx_lock = atomic_read(&priv->tx_lock);
-// VLAD:
-	if( 0 == tx_lock)
-	    wsm_lock_tx(priv);
-	if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0) {
-// VLAD:
-// 		wsm_unlock_tx(priv);
-		if( 1 == tx_lock)
-		    wsm_unlock_tx(priv);
 
-	}
+	cw1200_do_unjoin(priv);
+	/* Tell the stack we're dead */
+	ieee80211_connection_loss(priv->vif);
+
+	wsm_unlock_tx(priv);
+
+
+
 }
 
 static void cw1200_do_unjoin(struct cw1200_common *priv)
@@ -1451,8 +1451,6 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 	struct wsm_reset reset = {
 		.reset_statistics = true,
 	};
-
-	cancel_delayed_work_sync(&priv->join_timeout);
 
 	mutex_lock(&priv->conf_mutex);
 	priv->join_pending = false;
@@ -1512,6 +1510,7 @@ void cw1200_unjoin_work(struct work_struct *work)
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
 	pr_debug("[STA] %s()\n",__func__);
+	cancel_delayed_work(&priv->join_timeout);
 	cw1200_do_unjoin(priv);
 
 	/* Tell the stack we're dead */
