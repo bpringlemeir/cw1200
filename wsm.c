@@ -1148,7 +1148,8 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 
 			/* Kill BH thread to report the error to the top layer. */
 			atomic_add(1, &priv->bh_term);
-			priv->bh_error = 1;
+// VLAD:
+//			priv->bh_error = 1;
 			wake_up(&priv->bh_wq);
 			ret = -ETIMEDOUT;
 		}
@@ -1223,7 +1224,11 @@ bool wsm_flush_tx(struct cw1200_common *priv)
                               !atomic_read(&priv->hw_bufs_used),
 						      timeout) <= 0) {
 			/* Hmmm... Not good. Frame had stuck in firmware. */
-			priv->bh_error = 1;
+// VLAD:
+//			priv->bh_error = 1;
+			/* Kill BH thread to report the error to the top layer. */
+			atomic_add(1, &priv->bh_term);
+//
 			wiphy_err(priv->hw->wiphy, "[WSM] TX Frames (%d) stuck in firmware, killing BH\n", atomic_read(&priv->hw_bufs_used));
 			wake_up(&priv->bh_wq);
 			return false;
