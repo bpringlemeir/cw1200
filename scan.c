@@ -25,22 +25,11 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	switch (priv->join_status) {
 	case CW1200_JOIN_STATUS_PRE_STA:
 	case CW1200_JOIN_STATUS_JOINING:
-		wiphy_dbg(priv->hw->wiphy, "[SCAN] BUSY because of status: %d\n",priv->join_status);
-		priv->cw1200_scan_failed++;
-// VLAD: no need to throw exception anymore.
-#if 0
-		if( 2 == priv->cw1200_scan_failed) {
-			wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
-			// VLAD: waking up SoC reset and restart sequence
-			priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
-            wake_up_interruptible(&priv->cw1200_fw_wq);
-		}
-#endif
 		return -EBUSY;
 	default:
 		break;
 	}
-	priv->cw1200_scan_failed = 0;
+
 	wiphy_dbg(priv->hw->wiphy, "[SCAN] hw req, type %d, %d channels, flags: 0x%x.\n",
 		  scan->type, scan->num_channels, scan->flags);
 
@@ -156,11 +145,8 @@ void cw1200_scan_work(struct work_struct *work)
 		 * when STA is joined but not yet associated.
 		 * Force unjoin in this case.
 		 */
-
-		if (cancel_delayed_work_sync(&priv->join_timeout) > 0) {
-			pr_debug("%s(first_run): calling cw1200_join_timeout() \n",__func__);
-			cw1200_join_timeout(&priv->join_timeout.work); /* wsm lock by queuer */
-		}
+		if (cancel_delayed_work_sync(&priv->join_timeout) > 0)
+			cw1200_join_timeout(&priv->join_timeout.work);
 	}
 
 	mutex_lock(&priv->conf_mutex);

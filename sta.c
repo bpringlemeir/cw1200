@@ -141,8 +141,7 @@ void cw1200_stop(struct ieee80211_hw *dev)
 	wsm_unlock_tx(priv);
 	atomic_xchg(&priv->tx_lock, 0); /* for recovery to work */
 }
-// VLAD:
-//static int cw1200_bssloss_mitigation = 1;
+
 static int cw1200_bssloss_mitigation = 1;
 module_param(cw1200_bssloss_mitigation, int, 0644);
 MODULE_PARM_DESC(cw1200_bssloss_mitigation, "BSS Loss mitigation. 0 == disabled, 1 == enabled (default)");
@@ -194,14 +193,6 @@ void __cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 		// VLAD:
 		spin_unlock(&priv->bss_loss_lock);
 		cancel_delayed_work_sync(&priv->bss_loss_work);
-		// VLAD: waking up SoC reset and restart sequence
-#if 0
-		if( atomic_read(&priv->tx_lock) > 1 ) {
-         wiphy_info(priv->hw->wiphy,"%s() broken .Throwing exception.\n",__func__);
-		 priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
-         wake_up_interruptible(&priv->cw1200_fw_wq);
-		}
-#endif
 		spin_lock(&priv->bss_loss_lock);
 		priv->bss_loss_state = 0;
 	}
@@ -1014,7 +1005,6 @@ void cw1200_event_handler(struct work_struct *work)
 				/* Scan is in progress. Delay reporting.
 				 * Scan complete will trigger bss_loss_work
 				 */
-				pr_debug("[CQM] BSS LOST: scan in progress. Reschedulng bss_loss_work\n");
 				priv->delayed_link_loss = 1;
 				/* Also start a watchdog. */
 				queue_delayed_work(priv->workqueue,
@@ -1419,9 +1409,6 @@ void cw1200_join_timeout(struct work_struct *work)
 	ieee80211_connection_loss(priv->vif);
 
 	wsm_unlock_tx(priv);
-
-
-
 }
 
 static void cw1200_do_unjoin(struct cw1200_common *priv)
@@ -1435,7 +1422,7 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 
 	if (atomic_read(&priv->scan.in_progress)) {
 		if (priv->delayed_unjoin)
-			pr_debug("[STA] %s() Delayed unjoin is already scheduled.\n",__func__);
+			wiphy_dbg(priv->hw->wiphy, "Delayed unjoin is already scheduled.\n");
 		else
 			priv->delayed_unjoin = true;
 		goto done;
@@ -1488,7 +1475,6 @@ void cw1200_unjoin_work(struct work_struct *work)
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
 
-	pr_debug("[STA] %s()\n",__func__);
 	cancel_delayed_work(&priv->join_timeout);
 
 	cw1200_do_unjoin(priv);
@@ -1933,7 +1919,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	     BSS_CHANGED_IBSS |
 	     BSS_CHANGED_BASIC_RATES |
 	     BSS_CHANGED_HT)) {
-		pr_debug("BSS_CHANGED_ASSOC (%d)\n",info->assoc);
+		pr_debug("BSS_CHANGED_ASSOC\n");
 		if (info->assoc) {
 			if (priv->join_status < CW1200_JOIN_STATUS_PRE_STA) {
 				ieee80211_connection_loss(vif);
