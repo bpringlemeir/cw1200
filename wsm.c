@@ -1225,7 +1225,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 						      timeout) <= 0) {
 			/* Hmmm... Not good. Frame had stuck in firmware. */
 // VLAD:
-//			priv->bh_error = 1;
+			priv->bh_error = 1;
 			/* Kill BH thread to report the error to the top layer. */
 			atomic_add(1, &priv->bh_term);
 //
