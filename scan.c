@@ -156,9 +156,11 @@ void cw1200_scan_work(struct work_struct *work)
 		 * when STA is joined but not yet associated.
 		 * Force unjoin in this case.
 		 */
-		pr_debug("%s(first_run)\n",__func__);
-		if (cancel_delayed_work_sync(&priv->join_timeout) > 0)
+
+		if (cancel_delayed_work_sync(&priv->join_timeout) > 0) {
+			pr_debug("%s(first_run): calling cw1200_join_timeout() \n",__func__);
 			cw1200_join_timeout(&priv->join_timeout.work); /* wsm lock by queuer */
+		}
 	}
 
 	mutex_lock(&priv->conf_mutex);
@@ -285,9 +287,15 @@ static void cw1200_scan_restart_delayed(struct cw1200_common *priv)
 
 	if (priv->delayed_unjoin) {
 		priv->delayed_unjoin = false;
-		if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0)
+		pr_debug("%s() delayed_unjoin lock_tx is %d\n",__func__,atomic_read(&priv->tx_lock));
+		wsm_lock_tx(priv);
+
+		if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0) {
+			pr_debug("%s() unjoin_work already in work queue, lock_tx is %d\n",__func__,atomic_read(&priv->tx_lock));
 			wsm_unlock_tx(priv);
+		}
 	} else if (priv->delayed_link_loss) {
+		    pr_debug("%s() [CQM] Requeue BSS loss , lock_tx is %d\n",__func__,atomic_read(&priv->tx_lock));
 			wiphy_dbg(priv->hw->wiphy, "[CQM] Requeue BSS loss.\n");
 			priv->delayed_link_loss = 0;
 			cw1200_cqm_bssloss_sm(priv, 1, 0, 0);
