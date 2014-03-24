@@ -854,10 +854,8 @@ static int cw1200_spi_disconnect(struct spi_device *func)
 static struct spi_driver spi_driver = {
 	.probe		= cw1200_spi_probe,
 	.remove		= cw1200_spi_disconnect,
-#if 0 // Power management will be handled by APP layer
 	.suspend        = cw1200_spi_suspend,
 	.resume         = cw1200_spi_resume,
-#endif
 	.driver = {
 		.name		= "cw1200_wlan_spi",
 		.bus            = &spi_bus_type,
