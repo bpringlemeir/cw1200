@@ -270,9 +270,7 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	priv->hw_type = -1;
 	priv->mode = NL80211_IFTYPE_UNSPECIFIED;
 	priv->rates = cw1200_rates; /* TODO: fetch from FW */
-
 	priv->mcs_rates = cw1200_n_rates;
-
 	if (cw1200_ba_rx_tids != -1)
 		priv->ba_rx_tid_mask = cw1200_ba_rx_tids;
 	else
@@ -455,19 +453,19 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 	struct cw1200_common *priv = dev->priv;
 	int i;
 
-	ieee80211_unregister_hw(dev);
+	cw1200_debug_release(priv);
 
-	del_timer_sync(&priv->mcast_timeout);
+	/* Destroy workqueue's first to stop other users of 'priv'. */
 	cw1200_unregister_bh(priv);
 
-	cw1200_debug_release(priv);
+	destroy_workqueue(priv->workqueue);
+	priv->workqueue = NULL;
+
+	del_timer_sync(&priv->mcast_timeout);
 
 	mutex_destroy(&priv->conf_mutex);
 
 	wsm_buf_deinit(&priv->wsm_cmd_buf);
-
-	destroy_workqueue(priv->workqueue);
-	priv->workqueue = NULL;
 
 	if (priv->sdd && !priv->fixed_sdd) {
 		release_firmware(priv->sdd);
@@ -481,6 +479,8 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 #ifdef CONFIG_PM
 	cw1200_pm_deinit(&priv->pm_state);
 #endif
+
+	ieee80211_unregister_hw(dev);  /* potentially frees 'dev' + 'priv' */
 }
 
 /* Clock is in KHz */
