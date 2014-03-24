@@ -103,7 +103,7 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 
 	wsm_lock_tx(priv);
 
-	BUG_ON(priv->scan.req);
+	CW1200_BUG_ON(priv->scan.req);
 	priv->scan.req = req;
 	priv->scan.n_ssids = 0;
 	priv->scan.status = 0;
@@ -455,7 +455,7 @@ void cw1200_probe_work(struct work_struct *work)
 	skb_push(frame.skb, txpriv->offset);
 	if (!ret)
 		IEEE80211_SKB_CB(frame.skb)->flags |= IEEE80211_TX_STAT_ACK;
-	BUG_ON(cw1200_queue_remove(queue, priv->pending_frame_id));
+	CW1200_BUG_ON(cw1200_queue_remove(queue, priv->pending_frame_id));
 
 	if (ret) {
 		priv->scan.direct_probe = 0;

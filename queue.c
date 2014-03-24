@@ -39,7 +39,7 @@ static inline void __cw1200_queue_lock(struct cw1200_queue *queue)
 static inline void __cw1200_queue_unlock(struct cw1200_queue *queue)
 {
 	struct cw1200_queue_stats *stats = queue->stats;
-	BUG_ON(!queue->tx_locked_cnt);
+	CW1200_BUG_ON(!queue->tx_locked_cnt);
 	if (--queue->tx_locked_cnt == 0) {
 		pr_debug("[TX] Queue %d is unlocked.\n",
 			 queue->queue_id);
@@ -84,7 +84,7 @@ static void cw1200_queue_register_post_gc(struct list_head *gc_list,
 	struct cw1200_queue_item *gc_item;
 	gc_item = kmalloc(sizeof(struct cw1200_queue_item),
 			GFP_ATOMIC);
-	BUG_ON(!gc_item);
+	CW1200_BUG_ON(!gc_item);
 	memcpy(gc_item, item, sizeof(struct cw1200_queue_item));
 	list_add_tail(&gc_item->head, gc_list);
 }
@@ -295,7 +295,7 @@ int cw1200_queue_put(struct cw1200_queue *queue,
 	if (!WARN_ON(list_empty(&queue->free_pool))) {
 		struct cw1200_queue_item *item = list_first_entry(
 			&queue->free_pool, struct cw1200_queue_item, head);
-		BUG_ON(item->skb);
+		CW1200_BUG_ON(item->skb);
 
 		list_move_tail(&item->head, &queue->queue);
 		item->skb = skb;
@@ -386,7 +386,7 @@ int cw1200_queue_requeue(struct cw1200_queue *queue, u32 packet_id)
 	item = &queue->pool[item_id];
 
 	spin_lock_bh(&queue->lock);
-	BUG_ON(queue_id != queue->queue_id);
+	CW1200_BUG_ON(queue_id != queue->queue_id);
 	if (queue_generation != queue->generation) {
 		ret = -ENOENT;
 	} else if (item_id >= (unsigned) queue->capacity) {
@@ -457,7 +457,7 @@ int cw1200_queue_remove(struct cw1200_queue *queue, u32 packet_id)
 	item = &queue->pool[item_id];
 
 	spin_lock_bh(&queue->lock);
-	BUG_ON(queue_id != queue->queue_id);
+	CW1200_BUG_ON(queue_id != queue->queue_id);
 	if (queue_generation != queue->generation) {
 		ret = -ENOENT;
 	} else if (item_id >= (unsigned) queue->capacity) {
@@ -506,7 +506,7 @@ int cw1200_queue_get_skb(struct cw1200_queue *queue, u32 packet_id,
 	item = &queue->pool[item_id];
 
 	spin_lock_bh(&queue->lock);
-	BUG_ON(queue_id != queue->queue_id);
+	CW1200_BUG_ON(queue_id != queue->queue_id);
 	if (queue_generation != queue->generation) {
 		ret = -ENOENT;
 	} else if (item_id >= (unsigned) queue->capacity) {

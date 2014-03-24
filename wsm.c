@@ -1119,7 +1119,7 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 	((__le16 *)buf->begin)[1] = __cpu_to_le16(cmd);
 
 	spin_lock(&priv->wsm_cmd.lock);
-	BUG_ON(priv->wsm_cmd.ptr);
+	CW1200_BUG_ON(priv->wsm_cmd.ptr);
 	priv->wsm_cmd.ptr = buf->begin;
 	priv->wsm_cmd.len = buf_len;
 	priv->wsm_cmd.arg = arg;
@@ -1156,7 +1156,7 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 		}
 	} else {
 		spin_lock(&priv->wsm_cmd.lock);
-		BUG_ON(!priv->wsm_cmd.done);
+		CW1200_BUG_ON(!priv->wsm_cmd.done);
 		ret = priv->wsm_cmd.ret;
 		spin_unlock(&priv->wsm_cmd.lock);
 	}
@@ -1197,7 +1197,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 	int i;
 
 	/* Flush must be called with TX lock held. */
-	BUG_ON(!atomic_read(&priv->tx_lock));
+	CW1200_BUG_ON(!atomic_read(&priv->tx_lock));
 
 	/* First check if we really need to do something.
 	 * It is safe to use unprotected access, as hw_bufs_used
@@ -1245,7 +1245,7 @@ void wsm_unlock_tx(struct cw1200_common *priv)
 {
 	int tx_lock;
 	tx_lock = atomic_sub_return(1, &priv->tx_lock);
-	BUG_ON(tx_lock < 0);
+	CW1200_BUG_ON(tx_lock < 0);
 
 	if (tx_lock == 0) {
 		if (!priv->bh_error)
@@ -1574,7 +1574,7 @@ static bool wsm_handle_tx_data(struct cw1200_common *priv,
 		break;
 	case do_drop:
 		pr_debug("[WSM] Drop frame (0x%.4X).\n", fctl);
-		BUG_ON(cw1200_queue_remove(queue, wsm->packet_id));
+		CW1200_BUG_ON(cw1200_queue_remove(queue, wsm->packet_id));
 		handled = true;
 		break;
 	case do_wep:
@@ -1695,7 +1695,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	if (priv->wsm_cmd.ptr) { /* CMD request */
 		++count;
 		spin_lock(&priv->wsm_cmd.lock);
-		BUG_ON(!priv->wsm_cmd.ptr);
+		CW1200_BUG_ON(!priv->wsm_cmd.ptr);
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
 		*burst = 1;
@@ -1797,7 +1797,7 @@ void wsm_txed(struct cw1200_common *priv, u8 *data)
 
 void wsm_buf_init(struct wsm_buf *buf)
 {
-	BUG_ON(buf->begin);
+	CW1200_BUG_ON(buf->begin);
 	buf->begin = kmalloc(FWLOAD_BLOCK_SIZE, GFP_KERNEL | GFP_DMA);
 	buf->end = buf->begin ? &buf->begin[FWLOAD_BLOCK_SIZE] : buf->begin;
 	wsm_buf_reset(buf);

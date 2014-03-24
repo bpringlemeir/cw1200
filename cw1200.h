@@ -30,6 +30,19 @@
 #include "txrx.h"
 #include "pm.h"
 
+/* Custom BUG_ON() as the 2.6.36 version is broken.  Also, this
+ * version will save kernel output to '/var/log/messages' if
+ * possible. */
+#include <linux/reboot.h>
+#define CW1200_BUG_ON(condition) do {                                   \
+        if (unlikely(condition)) {                                      \
+            printk("CW1200: BUG at %s:%d/%s()!\n",                      \
+                   __FILE__, __LINE__, __func__);                       \
+            dump_stack();                                               \
+            orderly_poweroff(1); /* Sync disk if possible. */           \
+        }                                                               \
+    } while (0)
+
 /* Forward declarations */
 struct hwbus_ops;
 struct task_struct;

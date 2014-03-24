@@ -72,7 +72,7 @@ static void tx_policy_build(const struct cw1200_common *priv,
 	int i, j;
 	unsigned limit = priv->short_frame_max_tx_count;
 	unsigned total = 0;
-	BUG_ON(rates[0].idx < 0);
+	CW1200_BUG_ON(rates[0].idx < 0);
 	memset(policy, 0, sizeof(*policy));
 
 	/* Sort rates in descending order. */
@@ -771,7 +771,7 @@ void cw1200_tx(struct ieee80211_hw *dev,
 	spin_lock_bh(&priv->ps_state_lock);
 	{
 		tid_update = cw1200_tx_h_pm_state(priv, &t);
-		BUG_ON(cw1200_queue_put(&priv->tx_queue[t.queue],
+		CW1200_BUG_ON(cw1200_queue_put(&priv->tx_queue[t.queue],
 					t.skb, &t.txpriv));
 	}
 	spin_unlock_bh(&priv->ps_state_lock);
@@ -1245,7 +1245,7 @@ int cw1200_alloc_key(struct cw1200_common *priv)
 
 void cw1200_free_key(struct cw1200_common *priv, int idx)
 {
-	BUG_ON(!(priv->key_map & BIT(idx)));
+	CW1200_BUG_ON(!(priv->key_map & BIT(idx)));
 	memset(&priv->keys[idx], 0, sizeof(priv->keys[idx]));
 	priv->key_map &= ~BIT(idx);
 }

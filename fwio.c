@@ -152,7 +152,7 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
             goto error;
         }
     }
-//	BUG_ON(!firmware->data);
+//	CW1200_BUG_ON(!firmware->data);
 
 
 	buf = kmalloc(DOWNLOAD_BLOCK_SIZE, GFP_KERNEL | GFP_DMA);

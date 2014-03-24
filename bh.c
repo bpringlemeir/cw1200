@@ -357,8 +357,8 @@ static int cw1200_bh_tx_helper(struct cw1200_common *priv,
 	}
 
 	wsm = (struct wsm_hdr *)data;
-	BUG_ON(tx_len < sizeof(*wsm));
-	BUG_ON(__le16_to_cpu(wsm->len) != tx_len);
+	CW1200_BUG_ON(tx_len < sizeof(*wsm));
+	CW1200_BUG_ON(__le16_to_cpu(wsm->len) != tx_len);
 
 	atomic_add(1, &priv->bh_tx);
 
@@ -544,7 +544,7 @@ static int cw1200_bh(void *arg)
 		if (tx) {
 			tx = 0;
 
-			BUG_ON(atomic_read(&priv->hw_bufs_used) > priv->wsm_caps.input_buffers);
+			CW1200_BUG_ON(atomic_read(&priv->hw_bufs_used) > priv->wsm_caps.input_buffers);
 			tx_burst = priv->wsm_caps.input_buffers - atomic_read(&priv->hw_bufs_used);
 			tx_allowed = tx_burst > 0;
 
