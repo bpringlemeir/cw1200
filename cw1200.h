@@ -38,8 +38,12 @@
         if (unlikely(condition)) {                                      \
             printk("CW1200: BUG at %s:%d/%s()!\n",                      \
                    __FILE__, __LINE__, __func__);                       \
-            dump_stack();                                               \
-            orderly_poweroff(1); /* Sync disk if possible. */           \
+            if( !in_irq() ) {                                           \
+                dump_stack();                                           \
+                orderly_poweroff(1); /* Sync disk if possible. */       \
+                msleep(60*1000);                                        \
+            }                                                           \
+            panic("cw1200 bug!");                                       \
         }                                                               \
     } while (0)
 
