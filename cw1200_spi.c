@@ -48,7 +48,6 @@ struct hwbus_priv {
 	wait_queue_head_t       wq;
 	int claimed;
 	// VLAD:
-		spinlock_t      fw_reset_lock;
 		int manually_suspended;
 
 };
@@ -717,7 +716,6 @@ static int cw1200_spi_probe(struct spi_device *func)
 	self->pdata = plat_data;
 	self->func = func;
 	spin_lock_init(&self->lock);
-	spin_lock_init(&self->fw_reset_lock);
 	spi_set_drvdata(func, self);
 
 	init_waitqueue_head(&self->wq);
