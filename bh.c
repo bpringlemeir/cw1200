@@ -422,13 +422,15 @@ static int cw1200_bh(void *arg)
 		} else {
 			status = MAX_SCHEDULE_TIMEOUT;
 		}
-
+/* VLAD: */
+#if 0
 		/* Dummy Read for SDIO retry mechanism*/
 		if ((priv->hw_type != -1) &&
 		    (atomic_read(&priv->bh_rx) == 0) &&
 		    (atomic_read(&priv->bh_tx) == 0))
 			cw1200_reg_read(priv, ST90TDS_CONFIG_REG_ID,
 					&dummy, sizeof(dummy));
+#endif
 
 		pr_debug("[BH] waiting ...\n");
 		status = wait_event_interruptible_timeout(priv->bh_wq, ({
