@@ -1201,15 +1201,19 @@ static void cw1200_join_complete(struct cw1200_common *priv)
 	cancel_delayed_work_sync(&priv->join_timeout);
 
 	if (priv->join_complete_status) {
+		mutex_lock(&priv->conf_mutex);
 		priv->join_status = CW1200_JOIN_STATUS_PASSIVE;
 		cw1200_update_listening(priv, priv->listening);
+		mutex_unlock(&priv->conf_mutex);
 		cw1200_do_unjoin(priv);
 		ieee80211_connection_loss(priv->vif);
 	} else {
+		mutex_lock(&priv->conf_mutex);
 		if (priv->mode == NL80211_IFTYPE_ADHOC)
 			priv->join_status = CW1200_JOIN_STATUS_IBSS;
 		else
 			priv->join_status = CW1200_JOIN_STATUS_PRE_STA;
+		mutex_unlock(&priv->conf_mutex);
 	}
 	wsm_unlock_tx(priv); /* Clearing the lock held before do_join() */
 }
@@ -1218,9 +1222,7 @@ void cw1200_join_complete_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, join_complete_work);
-	mutex_lock(&priv->conf_mutex);
 	cw1200_join_complete(priv);
-	mutex_unlock(&priv->conf_mutex);
 }
 
 void cw1200_join_complete_cb(struct cw1200_common *priv,
@@ -1377,9 +1379,11 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0)
 			wsm_unlock_tx(priv);
 	} else {
-		if (!(join.flags & WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND))
+		if (!(join.flags & WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND)) {
+			mutex_unlock(&priv->conf_mutex);
 			cw1200_join_complete(priv); /* Will clear tx_lock */
-
+			mutex_lock(&priv->conf_mutex);
+        }
 		/* Upload keys */
 		cw1200_upload_keys(priv);
 
