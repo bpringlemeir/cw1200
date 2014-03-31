@@ -1094,15 +1094,6 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 		goto done;
 	}
 
-	/* Block until the cmd buffer is completed.  Tortuous. */
-	spin_lock(&priv->wsm_cmd.lock);
-	while (!priv->wsm_cmd.done) {
-		spin_unlock(&priv->wsm_cmd.lock);
-		spin_lock(&priv->wsm_cmd.lock);
-	}
-	priv->wsm_cmd.done = 0;
-	spin_unlock(&priv->wsm_cmd.lock);
-
 	if (cmd == WSM_WRITE_MIB_REQ_ID ||
 	    cmd == WSM_READ_MIB_REQ_ID)
 		pr_debug("[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%zu)\n",
@@ -1122,7 +1113,14 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 	((__le16 *)buf->begin)[0] = __cpu_to_le16(buf_len);
 	((__le16 *)buf->begin)[1] = __cpu_to_le16(cmd);
 
+	/* Block until the cmd buffer is completed.  Tortuous. */
 	spin_lock(&priv->wsm_cmd.lock);
+	while (!priv->wsm_cmd.done) {
+		spin_unlock(&priv->wsm_cmd.lock);
+		spin_lock(&priv->wsm_cmd.lock);
+	}
+	priv->wsm_cmd.done = 0;
+
 	CW1200_BUG_ON(priv->wsm_cmd.ptr);
 	priv->wsm_cmd.ptr = buf->begin;
 	priv->wsm_cmd.len = buf_len;
@@ -1151,8 +1149,6 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 			pr_err("Outstanding outgoing frames:  %d\n", priv->hw_bufs_used);
 
 			/* Kill BH thread to report the error to the top layer. */
-//			atomic_add(1, &priv->bh_term);
-// VLAD:
 			priv->bh_error = 1;
 			barrier();
 			wake_up(&priv->bh_wq);
@@ -1685,11 +1681,11 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	if (priv->wsm_cmd.ptr) { /* CMD request */
 		++count;
 		spin_lock(&priv->wsm_cmd.lock);
-		CW1200_BUG_ON(!priv->wsm_cmd.ptr);
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
-		*burst = 1;
 		spin_unlock(&priv->wsm_cmd.lock);
+		CW1200_BUG_ON(*data == NULL);
+		*burst = 1;
 	} else {
 		for (;;) {
 			int ret;
