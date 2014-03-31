@@ -241,8 +241,7 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "TX bufs:    %d x %d bytes\n",
 		   priv->wsm_caps.input_buffers,
 		   priv->wsm_caps.input_buffer_size);
-	seq_printf(seq, "Used bufs:  %d\n",
-               atomic_read(&priv->hw_bufs_used));
+	seq_printf(seq, "Used bufs:  %d\n", priv->hw_bufs_used);
 	seq_printf(seq, "Powermgmt:  %s\n",
 		   priv->powersave_enabled ? "on" : "off");
 	seq_printf(seq, "Device:     %s\n",

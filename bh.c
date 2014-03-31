@@ -81,7 +81,7 @@ int cw1200_register_bh(struct cw1200_common *priv)
 	atomic_set(&priv->bh_term, 0);
 	atomic_set(&priv->bh_suspend, CW1200_BH_RESUMED);
 	priv->bh_error = 0;
-	atomic_set(&priv->hw_bufs_used,0);
+	priv->hw_bufs_used = 0;
 	priv->buf_id_tx = 0;
 	priv->buf_id_rx = 0;
 	init_waitqueue_head(&priv->bh_wq);
@@ -135,19 +135,20 @@ void cw1200_bh_wakeup(struct cw1200_common *priv)
 
 static inline void wsm_alloc_tx_buffer(struct cw1200_common *priv)
 {
-	atomic_inc(&priv->hw_bufs_used);
+	++priv->hw_bufs_used;
 }
 
 int wsm_release_tx_buffer(struct cw1200_common *priv, int count)
 {
 	int ret = 0;
-	int hw_bufs_used = atomic_sub_return(count, &priv->hw_bufs_used);
+	int hw_bufs_used = priv->hw_bufs_used;
 
-	if (WARN_ON(hw_bufs_used < 0))
+	priv->hw_bufs_used -= count;
+	if (WARN_ON(priv->hw_bufs_used < 0))
 		ret = -1;
-	else if (hw_bufs_used + count >= priv->wsm_caps.input_buffers)
+	else if (hw_bufs_used >= priv->wsm_caps.input_buffers)
 		ret = 1;
-	if (!hw_bufs_used)
+	if (!priv->hw_bufs_used)
 		wake_up(&priv->bh_evt_wq);
 	return ret;
 }
@@ -404,7 +405,7 @@ static int cw1200_bh(void *arg)
 	int ret;
 
 	for (;;) {
-		if (!atomic_read(&priv->hw_bufs_used) &&
+		if (!priv->hw_bufs_used &&
 		    priv->powersave_enabled &&
 		    !priv->device_can_sleep &&
 		    !atomic_read(&priv->recent_scan)) {
@@ -412,7 +413,7 @@ static int cw1200_bh(void *arg)
 			pr_debug("[BH] Device wakedown. No data.\n");
 			cw1200_reg_write_16(priv, ST90TDS_CONTROL_REG_ID, 0);
 			priv->device_can_sleep = true;
-		} else if (atomic_read(&priv->hw_bufs_used)) {
+		} else if (priv->hw_bufs_used) {
 			/* Interrupt loss detection */
 			status = 1 * HZ;
 		} else {
@@ -455,11 +456,10 @@ static int cw1200_bh(void *arg)
 			int i;
 
 			/* Check to see if we have any outstanding frames */
-			if (atomic_read(&priv->hw_bufs_used) && (!rx || !tx)) {
+			if (priv->hw_bufs_used && (!rx || !tx)) {
 				wiphy_warn(priv->hw->wiphy,
-                           "Missed interrupt? "
-                           "(%d (rx%d tx%d) frames outstanding)\n",
-                           atomic_read(&priv->hw_bufs_used), rx, tx);
+					   "Missed interrupt? (%d frames outstanding)\n",
+					   priv->hw_bufs_used);
 				rx = 1;
 
 				/* Get a timestamp of "oldest" frame */
@@ -482,7 +482,7 @@ static int cw1200_bh(void *arg)
 				if (pending && timeout < 0) {
 					wiphy_warn(priv->hw->wiphy,
 						   "Timeout waiting for TX confirm (%d/%d pending, %ld vs %lu).\n",
-                               atomic_read(&priv->hw_bufs_used), pending,
+						   priv->hw_bufs_used, pending,
 						   timestamp, jiffies);
 					break;
 				}
@@ -544,8 +544,8 @@ static int cw1200_bh(void *arg)
 		if (tx) {
 			tx = 0;
 
-			CW1200_BUG_ON(atomic_read(&priv->hw_bufs_used) > priv->wsm_caps.input_buffers);
-			tx_burst = priv->wsm_caps.input_buffers - atomic_read(&priv->hw_bufs_used);
+			BUG_ON(priv->hw_bufs_used > priv->wsm_caps.input_buffers);
+			tx_burst = priv->wsm_caps.input_buffers - priv->hw_bufs_used;
 
 			if (tx_burst <= 0) {
 				/* Buffers full.  Ensure we process tx

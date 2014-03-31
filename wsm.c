@@ -1149,7 +1149,7 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 			pr_err("CMD req (0x%04x) stuck in firmware, killing BH\n", priv->wsm_cmd.cmd);
 			print_hex_dump_bytes("REQDUMP: ", DUMP_PREFIX_NONE,
 					     buf->begin, buf_len);
-			pr_err("Outstanding outgoing frames:  %d\n", atomic_read(&priv->hw_bufs_used));
+			pr_err("Outstanding outgoing frames:  %d\n", priv->hw_bufs_used);
 
 			/* Kill BH thread to report the error to the top layer. */
 //			atomic_add(1, &priv->bh_term);
@@ -1208,7 +1208,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 	 * It is safe to use unprotected access, as hw_bufs_used
 	 * can only decrements.
 	 */
-	if (!atomic_read(&priv->hw_bufs_used))
+	if (!priv->hw_bufs_used)
 		return true;
 
 	if (priv->bh_error) {
@@ -1227,7 +1227,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 
 		timeout = timestamp + WSM_CMD_LAST_CHANCE_TIMEOUT - jiffies;
 		if (timeout < 0 || wait_event_timeout(priv->bh_evt_wq,
-                              !atomic_read(&priv->hw_bufs_used),
+                              !priv->hw_bufs_used,
 						      timeout) <= 0) {
 			/* Hmmm... Not good. Frame had stuck in firmware. */
 // VLAD:
@@ -1236,7 +1236,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 			/* Kill BH thread to report the error to the top layer. */
 //			atomic_add(1, &priv->bh_term);
 //
-			wiphy_err(priv->hw->wiphy, "[WSM] TX Frames (%d) stuck in firmware, killing BH\n", atomic_read(&priv->hw_bufs_used));
+			wiphy_err(priv->hw->wiphy, "[WSM] TX Frames (%d) stuck in firmware, killing BH\n", priv->hw_bufs_used);
 			wake_up(&priv->bh_wq);
 			return false;
 		}
