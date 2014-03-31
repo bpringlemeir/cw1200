@@ -12,7 +12,6 @@
 
 #include <linux/skbuff.h>
 #include <linux/wait.h>
-#include <linux/skbuff.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
 #include <linux/random.h>
@@ -1226,9 +1225,8 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 			return true;
 
 		timeout = timestamp + WSM_CMD_LAST_CHANCE_TIMEOUT - jiffies;
-		if (timeout < 0 || wait_event_timeout(priv->bh_evt_wq,
-                              !priv->hw_bufs_used,
-						      timeout) <= 0) {
+		if (timeout < 0 ||
+            wait_for_completion_timeout(&priv->wsm_evt, timeout) <= 0) {
 			/* Hmmm... Not good. Frame had stuck in firmware. */
 // VLAD:
 			priv->bh_error = 1;

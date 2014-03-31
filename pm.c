@@ -201,8 +201,7 @@ int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 	/* Wait to avoid possible race with bh code.
 	 * But do not wait too long...
 	 */
-	if (wait_event_timeout(priv->bh_evt_wq,
-			       !priv->hw_bufs_used, HZ / 10) <= 0)
+	if (wait_for_completion_timeout(&priv->wsm_evt, HZ / 10) <= 0)
 		goto revert2;
 
 	/* Set UDP filter */

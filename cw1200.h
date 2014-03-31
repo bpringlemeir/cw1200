@@ -22,6 +22,7 @@
 #include <linux/version.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
+#include <linux/completion.h>
 #include <net/mac80211.h>
 
 #include "queue.h"
@@ -223,7 +224,7 @@ struct cw1200_common {
 
 	int				bh_error;
 	wait_queue_head_t		bh_wq;
-	wait_queue_head_t		bh_evt_wq;
+	struct completion		wsm_evt;
 	u8				buf_id_tx;
 	u8				buf_id_rx;
 	u8				wsm_rx_seq;

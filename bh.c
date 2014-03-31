@@ -85,7 +85,7 @@ int cw1200_register_bh(struct cw1200_common *priv)
 	priv->buf_id_tx = 0;
 	priv->buf_id_rx = 0;
 	init_waitqueue_head(&priv->bh_wq);
-	init_waitqueue_head(&priv->bh_evt_wq);
+	init_completion(&priv->wsm_evt);
 
 	err = !queue_work(priv->bh_workqueue, &priv->bh_work);
 	WARN_ON(err);
@@ -144,12 +144,12 @@ int wsm_release_tx_buffer(struct cw1200_common *priv, int count)
 	int hw_bufs_used = priv->hw_bufs_used;
 
 	priv->hw_bufs_used -= count;
-	if (WARN_ON(priv->hw_bufs_used < 0))
-		ret = -1;
+	if (WARN_ON(hw_bufs_used < count))
+		ret = -1;                 /* error */
 	else if (hw_bufs_used >= priv->wsm_caps.input_buffers)
-		ret = 1;
-	if (!priv->hw_bufs_used)
-		wake_up(&priv->bh_evt_wq);
+		ret = 1;                  /* throttle */
+	else if (hw_bufs_used == count)
+		complete(&priv->wsm_evt); /* signal flush */
 	return ret;
 }
 
@@ -504,7 +504,7 @@ static int cw1200_bh(void *arg)
 			}
 
 			atomic_set(&priv->bh_suspend, CW1200_BH_SUSPENDED);
-			wake_up(&priv->bh_evt_wq);
+			complete(&priv->wsm_evt);
 			status = wait_event_interruptible(priv->bh_wq,
 							  CW1200_BH_RESUME == atomic_read(&priv->bh_suspend));
 			if (status < 0) {
@@ -515,7 +515,7 @@ static int cw1200_bh(void *arg)
 			}
 			pr_debug("[BH] Device resume.\n");
 			atomic_set(&priv->bh_suspend, CW1200_BH_RESUMED);
-			wake_up(&priv->bh_evt_wq);
+			complete(&priv->wsm_evt);
 			atomic_add(1, &priv->bh_rx);
 			goto done;
 		}
