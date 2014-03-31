@@ -1174,23 +1174,13 @@ done:
 
 void wsm_lock_tx(struct cw1200_common *priv)
 {
-	wsm_cmd_lock(priv);
-	if (atomic_add_return(1, &priv->tx_lock) == 1) {
-		if (wsm_flush_tx(priv))
-			pr_debug("[WSM] TX is locked.\n");
-	} else {
-		pr_debug("[WSM] %s(%d).\n",__func__,atomic_read(&priv->tx_lock));
-	}
-	wsm_cmd_unlock(priv);
+	if (atomic_add_return(1, &priv->tx_lock) == 1)
+		wsm_flush_tx(priv);
 }
 
 void wsm_lock_tx_async(struct cw1200_common *priv)
 {
-	if (atomic_add_return(1, &priv->tx_lock) == 1)
-		pr_debug("[WSM] TX is locked (async).\n");
-	else {
-		pr_debug("[WSM] %s(%d).\n",__func__,atomic_read(&priv->tx_lock));
-	}
+	atomic_add_return(1, &priv->tx_lock);
 }
 
 bool wsm_flush_tx(struct cw1200_common *priv)
@@ -1253,9 +1243,6 @@ void wsm_unlock_tx(struct cw1200_common *priv)
 	if (tx_lock == 0) {
 		if (!priv->bh_error)
 			cw1200_bh_wakeup(priv);
-		pr_debug("[WSM] TX is unlocked.\n");
-	} else {
-		pr_debug("[WSM] %s(%d).\n",__func__,atomic_read(&priv->tx_lock));
 	}
 }
 
@@ -1707,7 +1694,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 		for (;;) {
 			int ret;
 
-			if (atomic_add_return(0, &priv->tx_lock))
+			if (atomic_read(&priv->tx_lock))
 				break;
 
 			spin_lock_bh(&priv->ps_state_lock);
