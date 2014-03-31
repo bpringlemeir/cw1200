@@ -1190,34 +1190,31 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 		/* In case of failure do not wait for magic. */
 		pr_err("[WSM] Fatal error occurred, will not flush TX.\n");
 		return false;
-	} else {
-		/* Get a timestamp of "oldest" frame */
-		for (i = 0; i < 4; ++i)
-			pending |= cw1200_queue_get_xmit_timestamp(
-					&priv->tx_queue[i],
-					&timestamp, 0xffffffff);
-		/* If there's nothing pending, we're good */
-		if (!pending)
-			return true;
-
-		timeout = timestamp + WSM_CMD_LAST_CHANCE_TIMEOUT - jiffies;
-		if (timeout < 0 ||
-            wait_for_completion_timeout(&priv->wsm_evt, timeout) <= 0) {
-			/* Hmmm... Not good. Frame had stuck in firmware. */
-// VLAD:
-			priv->bh_error = 1;
-			barrier();
-			/* Kill BH thread to report the error to the top layer. */
-//			atomic_add(1, &priv->bh_term);
-//
-			wiphy_err(priv->hw->wiphy, "[WSM] TX Frames (%d) stuck in firmware, killing BH\n", priv->hw_bufs_used);
-			wake_up(&priv->bh_wq);
-			return false;
-		}
-
-		/* Ok, everything is flushed. */
-		return true;
 	}
+
+	/* Get a timestamp of "oldest" frame */
+	for (i = 0; i < 4; ++i)
+		pending |= cw1200_queue_get_xmit_timestamp(
+			&priv->tx_queue[i],
+			&timestamp, 0xffffffff);
+	/* If there's nothing pending, we're good */
+	if (!pending)
+		return true;
+
+	timeout = timestamp + WSM_CMD_LAST_CHANCE_TIMEOUT - jiffies;
+	if (timeout < 0 ||
+	    wait_for_completion_timeout(&priv->wsm_evt, timeout) <= 0) {
+		/* Hmmm... Not good. Frame had stuck in firmware. */
+		priv->bh_error = 1;
+		barrier();
+		wiphy_err(priv->hw->wiphy, "[WSM] TX Frames (%d) stuck "
+			  "in firmware, killing BH\n", priv->hw_bufs_used);
+		wake_up(&priv->bh_wq);
+		return false;
+	}
+
+	/* Ok, everything is flushed. */
+	return true;
 }
 
 void wsm_unlock_tx(struct cw1200_common *priv)
