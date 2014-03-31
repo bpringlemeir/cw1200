@@ -398,7 +398,6 @@ static int cw1200_bh(void *arg)
 	struct cw1200_common *priv = arg;
 	int rx, tx, term, suspend;
 	u16 ctrl_reg = 0;
-	int tx_allowed;
 	int pending_tx = 0;
 	int tx_burst;
 	long status;
@@ -547,9 +546,8 @@ static int cw1200_bh(void *arg)
 
 			CW1200_BUG_ON(atomic_read(&priv->hw_bufs_used) > priv->wsm_caps.input_buffers);
 			tx_burst = priv->wsm_caps.input_buffers - atomic_read(&priv->hw_bufs_used);
-			tx_allowed = tx_burst > 0;
 
-			if (!tx_allowed) {
+			if (tx_burst <= 0) {
 				/* Buffers full.  Ensure we process tx
 				 * after we handle rx..
 				 */
