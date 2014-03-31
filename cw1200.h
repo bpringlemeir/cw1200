@@ -34,17 +34,10 @@
 /* Custom BUG_ON() as the 2.6.36 version is broken.  Also, this
  * version will save kernel output to '/var/log/messages' if
  * possible. */
-#include <linux/reboot.h>
+void cw1200_bug(const char *file, int line, const char *fnc);
 #define CW1200_BUG_ON(condition) do {                                   \
         if (unlikely(condition)) {                                      \
-            printk("CW1200: BUG at %s:%d/%s()!\n",                      \
-                   __FILE__, __LINE__, __func__);                       \
-            if( !in_irq() ) {                                           \
-                dump_stack();                                           \
-                orderly_poweroff(1); /* Sync disk if possible. */       \
-                msleep(60*1000);                                        \
-            }                                                           \
-            panic("cw1200 bug!");                                       \
+            cw1200_bug(__FILE__, __LINE__, __func__);                   \
         }                                                               \
     } while (0)
 

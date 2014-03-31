@@ -27,6 +27,7 @@
 #include <linux/vmalloc.h>
 #include <linux/random.h>
 #include <linux/sched.h>
+#include <linux/reboot.h>
 #include <net/mac80211.h>
 
 #include "cw1200.h"
@@ -479,6 +480,17 @@ static void cw1200_unregister_common(struct ieee80211_hw *dev)
 #endif
 
 	ieee80211_unregister_hw(dev);  /* potentially frees 'dev' + 'priv' */
+}
+
+void __cold cw1200_bug(const char *file, int line, const char *fnc)
+{
+	printk("CW1200: BUG at %s:%d/%s()!\n", file, line, fnc);
+	if (!in_irq()) {
+                dump_stack();
+                orderly_poweroff(1); /* Sync disk if possible. */
+                msleep(60*1000);
+	}
+	panic("cw1200 bug!");
 }
 
 /* Clock is in KHz */
