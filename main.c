@@ -402,12 +402,10 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	}
 
 	init_waitqueue_head(&priv->channel_switch_done);
-	init_waitqueue_head(&priv->wsm_cmd_wq);
 	init_waitqueue_head(&priv->wsm_startup_done);
 	init_waitqueue_head(&priv->ps_mode_switch_done);
 	wsm_buf_init(&priv->wsm_cmd_buf);
-	spin_lock_init(&priv->wsm_cmd.lock);
-	priv->wsm_cmd.done = 1;
+	init_completion(&priv->wsm_cmd_comp);
 	tx_policy_init(priv);
 
 	return hw;

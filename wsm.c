@@ -1080,7 +1080,10 @@ underflow:
 
 /* ******************************************************************** */
 /* WSM TX								*/
-
+/* All callers use 'wsm_cmd_mux', so there can only be one caller.  We
+ hand the 'wsm_cmd' off to the bottom half which signals with a
+ completion when it is done.
+*/
 static int wsm_cmd_send(struct cw1200_common *priv,
 			struct wsm_buf *buf,
 			void *arg, u16 cmd, long tmo)
@@ -1093,6 +1096,8 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 		ret = 0;
 		goto done;
 	}
+
+	CW1200_BUG_ON(!mutex_is_locked(&priv->wsm_cmd_mux));
 
 	if (cmd == WSM_WRITE_MIB_REQ_ID ||
 	    cmd == WSM_READ_MIB_REQ_ID)
@@ -1113,32 +1118,22 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 	((__le16 *)buf->begin)[0] = __cpu_to_le16(buf_len);
 	((__le16 *)buf->begin)[1] = __cpu_to_le16(cmd);
 
-	/* Block until the cmd buffer is completed.  Tortuous. */
-	spin_lock(&priv->wsm_cmd.lock);
-	while (!priv->wsm_cmd.done) {
-		spin_unlock(&priv->wsm_cmd.lock);
-		spin_lock(&priv->wsm_cmd.lock);
-	}
-	priv->wsm_cmd.done = 0;
-
+	/* Clear any previous completion. */
+	init_completion(&priv->wsm_cmd_comp);
 	CW1200_BUG_ON(priv->wsm_cmd.ptr);
 	priv->wsm_cmd.ptr = buf->begin;
 	priv->wsm_cmd.len = buf_len;
 	priv->wsm_cmd.arg = arg;
 	priv->wsm_cmd.cmd = cmd;
-	spin_unlock(&priv->wsm_cmd.lock);
 
 	cw1200_bh_wakeup(priv);
 
 	/* Wait for command completion */
-	ret = wait_event_timeout(priv->wsm_cmd_wq,
-				 priv->wsm_cmd.done, tmo);
-
-	if (!ret && !priv->wsm_cmd.done) {
-		spin_lock(&priv->wsm_cmd.lock);
-		priv->wsm_cmd.done = 1;
+	ret = wait_for_completion_timeout(&priv->wsm_cmd_comp, tmo);
+	if (ret)
+		ret = priv->wsm_cmd.ret;
+	else {
 		priv->wsm_cmd.ptr = NULL;
-		spin_unlock(&priv->wsm_cmd.lock);
 		if (priv->bh_error) {
 			/* Return ok to help system cleanup */
 			ret = 0;
@@ -1154,11 +1149,6 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 			wake_up(&priv->bh_wq);
 			ret = -ETIMEDOUT;
 		}
-	} else {
-		spin_lock(&priv->wsm_cmd.lock);
-		CW1200_BUG_ON(!priv->wsm_cmd.done);
-		ret = priv->wsm_cmd.ret;
-		spin_unlock(&priv->wsm_cmd.lock);
 	}
 done:
 	wsm_buf_reset(buf);
@@ -1329,12 +1319,10 @@ int wsm_handle_rx(struct cw1200_common *priv, u16 id,
 		/* Do not trust FW too much. Protection against repeated
 		 * response and race condition removal (see above).
 		 */
-		spin_lock(&priv->wsm_cmd.lock);
 		wsm_arg = priv->wsm_cmd.arg;
 		wsm_cmd = priv->wsm_cmd.cmd &
 				~WSM_TX_LINK_ID(WSM_TX_LINK_ID_MAX);
 		priv->wsm_cmd.cmd = 0xFFFF;
-		spin_unlock(&priv->wsm_cmd.lock);
 
 		if (WARN_ON((id & ~0x0400) != wsm_cmd)) {
 			/* Note that any non-zero is a fatal retcode. */
@@ -1406,14 +1394,11 @@ int wsm_handle_rx(struct cw1200_common *priv, u16 id,
 				   id & ~0x0400);
 		}
 
-		spin_lock(&priv->wsm_cmd.lock);
 		priv->wsm_cmd.ret = ret;
-		priv->wsm_cmd.done = 1;
-		spin_unlock(&priv->wsm_cmd.lock);
 
 		ret = 0; /* Error response from device should ne stop BH. */
 
-		wake_up(&priv->wsm_cmd_wq);
+		complete(&priv->wsm_cmd_comp);
 	} else if (id & 0x0800) {
 		switch (id) {
 		case WSM_STARTUP_IND_ID:
@@ -1680,10 +1665,8 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 
 	if (priv->wsm_cmd.ptr) { /* CMD request */
 		++count;
-		spin_lock(&priv->wsm_cmd.lock);
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
-		spin_unlock(&priv->wsm_cmd.lock);
 		CW1200_BUG_ON(*data == NULL);
 		*burst = 1;
 	} else {
@@ -1772,9 +1755,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 void wsm_txed(struct cw1200_common *priv, u8 *data)
 {
 	if (data == priv->wsm_cmd.ptr) {
-		spin_lock(&priv->wsm_cmd.lock);
 		priv->wsm_cmd.ptr = NULL;
-		spin_unlock(&priv->wsm_cmd.lock);
 	}
 }
 

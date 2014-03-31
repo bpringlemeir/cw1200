@@ -246,7 +246,7 @@ struct cw1200_common {
 	struct mutex			wsm_cmd_mux;
 	struct wsm_buf			wsm_cmd_buf;
 	struct wsm_cmd			wsm_cmd;
-	wait_queue_head_t		wsm_cmd_wq;
+	struct completion		wsm_cmd_comp;
 	wait_queue_head_t		wsm_startup_done;
 	int                             firmware_ready;
 	atomic_t			tx_lock;

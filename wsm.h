@@ -16,7 +16,7 @@
 #ifndef CW1200_WSM_H_INCLUDED
 #define CW1200_WSM_H_INCLUDED
 
-#include <linux/spinlock.h>
+#include <linux/completion.h>
 
 struct cw1200_common;
 
@@ -1826,8 +1826,6 @@ void wsm_buf_deinit(struct wsm_buf *buf);
 /* wsm_cmd API								*/
 
 struct wsm_cmd {
-	spinlock_t lock; /* Protect structure from multiple access */
-	int done;
 	u8 *ptr;
 	size_t len;
 	void *arg;

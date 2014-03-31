@@ -247,14 +247,10 @@ static int cw1200_status_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "Device:     %s\n",
 		   priv->device_can_sleep ? "asleep" : "awake");
 
-	spin_lock(&priv->wsm_cmd.lock);
-	seq_printf(seq, "WSM status: %s\n",
-		   priv->wsm_cmd.done ? "idle" : "active");
 	seq_printf(seq, "WSM cmd:    0x%.4X (%td bytes)\n",
 		   priv->wsm_cmd.cmd, priv->wsm_cmd.len);
 	seq_printf(seq, "WSM retval: %d\n",
 		   priv->wsm_cmd.ret);
-	spin_unlock(&priv->wsm_cmd.lock);
 
 	seq_printf(seq, "Datapath:   %s\n",
 		   atomic_read(&priv->tx_lock) ? "locked" : "unlocked");
