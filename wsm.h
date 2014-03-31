@@ -1239,10 +1239,6 @@ struct wsm_beacon_transmit {
 int wsm_beacon_transmit(struct cw1200_common *priv,
 			const struct wsm_beacon_transmit *arg);
 
-int wsm_start_find(struct cw1200_common *priv);
-
-int wsm_stop_find(struct cw1200_common *priv);
-
 typedef void (*wsm_find_complete_cb) (struct cw1200_common *priv, u32 status);
 
 struct wsm_suspend_resume {

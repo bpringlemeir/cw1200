@@ -724,7 +724,8 @@ nomem:
 }
 
 /* ******************************************************************** */
-
+/* Unused CW1200 message. */
+#if 0
 int wsm_start_find(struct cw1200_common *priv)
 {
 	int ret;
@@ -735,9 +736,12 @@ int wsm_start_find(struct cw1200_common *priv)
 	wsm_cmd_unlock(priv);
 	return ret;
 }
+#endif
 
 /* ******************************************************************** */
 
+/* Unused CW1200 message. */
+#if 0
 int wsm_stop_find(struct cw1200_common *priv)
 {
 	int ret;
@@ -748,6 +752,7 @@ int wsm_stop_find(struct cw1200_common *priv)
 	wsm_cmd_unlock(priv);
 	return ret;
 }
+#endif
 
 /* ******************************************************************** */
 
