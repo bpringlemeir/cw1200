@@ -222,7 +222,6 @@ static int cw1200_bh_rx_helper(struct cw1200_common *priv,
 	size_t wsm_len;
 	u16 wsm_id;
 	u8 wsm_seq;
-	int rx_resync = 1;
 
 	size_t alloc_len;
 	u8 *data;
@@ -291,12 +290,11 @@ static int cw1200_bh_rx_helper(struct cw1200_common *priv,
 				     &data[sizeof(*wsm)],
 				     wsm_len - sizeof(*wsm));
 		goto err;
-	} else if (!rx_resync) {
-		if (WARN_ON(wsm_seq != priv->wsm_rx_seq))
-			goto err;
 	}
+
+	if (WARN_ON(wsm_seq != priv->wsm_rx_seq))
+		goto err;
 	priv->wsm_rx_seq = (wsm_seq + 1) & 7;
-	rx_resync = 0;
 
 	if (wsm_id & 0x0400) {
 		int rc = wsm_release_tx_buffer(priv, 1);
@@ -404,7 +402,6 @@ static int cw1200_bh(void *arg)
 	int pending_tx = 0;
 	int tx_burst;
 	long status;
-	u32 dummy;
 	int ret;
 
 	for (;;) {
@@ -427,9 +424,11 @@ static int cw1200_bh(void *arg)
 		/* Dummy Read for SDIO retry mechanism*/
 		if ((priv->hw_type != -1) &&
 		    (atomic_read(&priv->bh_rx) == 0) &&
-		    (atomic_read(&priv->bh_tx) == 0))
+		    (atomic_read(&priv->bh_tx) == 0)) {
+			u32 dummy;
 			cw1200_reg_read(priv, ST90TDS_CONFIG_REG_ID,
 					&dummy, sizeof(dummy));
+		}
 #endif
 
 		pr_debug("[BH] waiting ...\n");
