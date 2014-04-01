@@ -152,7 +152,7 @@ static struct platform_driver cw1200_fwio_driver = {
 
 static void spi_complete(void *context)
 {
-   udelay(2);
+   udelay(10);
 }
 
 static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
