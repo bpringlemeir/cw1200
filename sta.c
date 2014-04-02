@@ -40,6 +40,7 @@ static void __cw1200_sta_notify(struct ieee80211_hw *dev,
 				enum sta_notify_cmd notify_cmd,
 				int link_id);
 static int __cw1200_flush(struct cw1200_common *priv, bool drop);
+static int cw1200_setup_mac(struct cw1200_common *priv);
 
 static inline void __cw1200_free_event_queue(struct list_head *list)
 {
@@ -84,8 +85,6 @@ int cw1200_start(struct ieee80211_hw *dev)
 	priv->cqm_beacon_loss_count = 10;
 
 	ret = cw1200_setup_mac(priv);
-	if (ret)
-		goto out;
 
 out:
 	mutex_unlock(&priv->conf_mutex);
@@ -1131,7 +1130,7 @@ static int cw1200_parse_sdd_file(struct cw1200_common *priv)
 
 extern const struct firmware fw_sdd_22;
 
-int cw1200_setup_mac(struct cw1200_common *priv)
+static int cw1200_setup_mac(struct cw1200_common *priv)
 {
 	int ret = 0;
 

@@ -76,7 +76,6 @@ static inline void cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 /* ******************************************************************** */
 /* Internal API								*/
 
-int cw1200_setup_mac(struct cw1200_common *priv);
 void cw1200_join_timeout(struct work_struct *work);
 void cw1200_unjoin_work(struct work_struct *work);
 void cw1200_join_complete_work(struct work_struct *work);
