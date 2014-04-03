@@ -1203,8 +1203,8 @@ static void cw1200_join_complete(struct cw1200_common *priv)
 		mutex_lock(&priv->conf_mutex);
 		priv->join_status = CW1200_JOIN_STATUS_PASSIVE;
 		cw1200_update_listening(priv, priv->listening);
-		mutex_unlock(&priv->conf_mutex);
 		cw1200_do_unjoin(priv);
+		mutex_unlock(&priv->conf_mutex);
 		ieee80211_connection_loss(priv->vif);
 	} else {
 		mutex_lock(&priv->conf_mutex);
@@ -1258,9 +1258,11 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		return;
 	}
 
-	if (priv->join_status)
+	if (priv->join_status) {
+		mutex_lock(&priv->conf_mutex);
 		cw1200_do_unjoin(priv);
-
+		mutex_unlock(&priv->conf_mutex);
+	}
 	bssid = priv->vif->bss_conf.bssid;
 
 	bss = cfg80211_get_bss(priv->hw->wiphy, priv->channel,
@@ -1407,7 +1409,10 @@ void cw1200_join_timeout(struct work_struct *work)
 		container_of(work, struct cw1200_common, join_timeout.work);
 	pr_debug("[WSM] Join timed out.\n");
 
+	mutex_lock(&priv->conf_mutex);
 	cw1200_do_unjoin(priv);
+	mutex_unlock(&priv->conf_mutex);
+
 	/* Tell the stack we're dead */
 	ieee80211_connection_loss(priv->vif);
 
@@ -1420,7 +1425,6 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 		.reset_statistics = true,
 	};
 
-	mutex_lock(&priv->conf_mutex);
 	priv->join_pending = false;
 
 	if (atomic_read(&priv->scan.in_progress)) {
@@ -1428,16 +1432,16 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 			wiphy_dbg(priv->hw->wiphy, "Delayed unjoin is already scheduled.\n");
 		else
 			priv->delayed_unjoin = true;
-		goto done;
+		return;
 	}
 
 	priv->delayed_link_loss = false;
 
 	if (!priv->join_status)
-		goto done;
+		return;
 
 	if (priv->join_status == CW1200_JOIN_STATUS_AP)
-		goto done;
+		return;
 
 	cancel_work_sync(&priv->update_filtering_work);
 	cancel_work_sync(&priv->set_beacon_wakeup_period_work);
@@ -1468,9 +1472,6 @@ static void cw1200_do_unjoin(struct cw1200_common *priv)
 	       sizeof(priv->firmware_ps_mode));
 
 	pr_debug("[STA] Unjoin completed.\n");
-
-done:
-	mutex_unlock(&priv->conf_mutex);
 }
 
 void cw1200_unjoin_work(struct work_struct *work)
@@ -1481,7 +1482,9 @@ void cw1200_unjoin_work(struct work_struct *work)
 	if(cancel_delayed_work(&priv->join_timeout))
 		wsm_unlock_tx(priv);
 
+	mutex_lock(&priv->conf_mutex);
 	cw1200_do_unjoin(priv);
+	mutex_unlock(&priv->conf_mutex);
 
 	/* Tell the stack we're dead */
 	ieee80211_connection_loss(priv->vif);
