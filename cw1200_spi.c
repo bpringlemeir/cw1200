@@ -66,8 +66,11 @@ static int cw1200_fwio_prepare(struct device *dev)
   dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
   wake_up_interruptible(&self->core->cw1200_fw_wq);
-  wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status);
+  if( wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status) < 0 ) {
 
+	dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw failure job termination\n",__func__);
+  }
+  self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
  return 0;
 }
 
@@ -82,9 +85,26 @@ static void cw1200_fwio_complete(struct device *dev)
   }
   dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
   self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+
   init_waitqueue_head(&self->core->cw1200_fw_wq);
   INIT_WORK(&self->core->cw1200_fw_failure_work,cw1200_fw_failure_job);
-  queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+
+  do {
+	  if( 0 == queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work)) {
+ 	   /* bizarre case when PM SLEEP event happened during RESET event */
+	   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
+	   wake_up_interruptible(&self->core->cw1200_fw_wq);
+	   if( wait_event_interruptible_timeout(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status,HZ) <= 0 ) {
+ 		dev_err(&cw1200_spi_dev->dev,"%s failed to wait for fw failure job termination\n",__func__);
+ 		CW1200_BUG_ON(1);
+	   }
+
+
+	  } else {
+        self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+        break;
+	  }
+  } while(1);
 
 
 }
@@ -634,12 +654,19 @@ static ssize_t cw1200_do_reset(struct device *dev,
 
  if(!strcmp(buf,"RESET\n")) {
   dev_info(&cw1200_spi_dev->dev,"%s() RESET received \n",__func__);
-  if(self) {
-   dev_info(&cw1200_spi_dev->dev,"%s() waking up the terminator \n",__func__);
-   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DORESET;
-   wake_up_interruptible(&self->core->cw1200_fw_wq);
+  if(self && self->core) {
+
+   if(CW1200_FW_ERR_DOALARM == self->core->cw1200_fw_error_status  ) {
+	   dev_info(&cw1200_spi_dev->dev,"%s() waking up the terminator \n",__func__);
+	   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DORESET;
+	   wake_up_interruptible(&self->core->cw1200_fw_wq);
+   } else {
+	   dev_info(&cw1200_spi_dev->dev,"%s() RESET not permitted at state: %d \n",__func__,self->core->cw1200_fw_error_status );
+
+   }
+
   } else {
-   dev_err(&cw1200_spi_dev->dev,"%s self == NULL\n",__func__);
+   dev_err(&cw1200_spi_dev->dev,"%s self->core == NULL\n",__func__);
   }
  } else if(!strcmp(buf,"SUSPEND\n")) {
 	 dev_dbg(&cw1200_spi_dev->dev,"%s() SUSPEND received \n",__func__);
@@ -867,6 +894,16 @@ static int cw1200_debugfs_set_cmd(void *data, u64 val)
   wake_up_interruptible(&self->core->cw1200_fw_wq);
 
  } break;
+
+ case 5: {
+  struct hwbus_priv *self = NULL;
+  self = spi_get_drvdata(cw1200_spi_dev);
+
+  self->core->bh_error = 1;
+  barrier();
+  wake_up(&self->core->bh_wq);
+
+ }
 
  }
 

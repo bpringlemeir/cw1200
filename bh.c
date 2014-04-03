@@ -593,8 +593,10 @@ static int cw1200_bh(void *arg)
 		priv->bh_error = 1;
 		/* TODO: schedule_work(recovery) */
 		// VLAD: waking up SoC reset and restart sequence
+		if( CW1200_FW_ERR_IDLE == priv->cw1200_fw_error_status) {
 				priv->cw1200_fw_error_status = CW1200_FW_ERR_DOALARM;
 		    	wake_up_interruptible(&priv->cw1200_fw_wq);
+		}
 	}
 	return 0;
 }
