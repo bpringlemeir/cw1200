@@ -1152,10 +1152,10 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 	/* Clear any previous completion. */
 	init_completion(&priv->wsm_cmd_comp);
 	CW1200_BUG_ON(priv->wsm_cmd.ptr);
-	priv->wsm_cmd.ptr = buf->begin;
 	priv->wsm_cmd.len = buf_len;
 	priv->wsm_cmd.arg = arg;
 	priv->wsm_cmd.cmd = cmd;
+	priv->wsm_cmd.ptr = buf->begin;  /* set 'ptr' last to signal 'bh' */
 
 #if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
 #ifdef WSMCMD_STACKTRACE
