@@ -1478,7 +1478,8 @@ void cw1200_unjoin_work(struct work_struct *work)
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
 
-	cancel_delayed_work(&priv->join_timeout);
+	if(cancel_delayed_work(&priv->join_timeout))
+		wsm_unlock_tx(priv);
 
 	cw1200_do_unjoin(priv);
 
