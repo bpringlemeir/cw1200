@@ -325,13 +325,13 @@ err:
 }
 
 static int cw1200_bh_tx_helper(struct cw1200_common *priv,
-			       int *pending_tx,
-			       int *tx_burst)
+			       int *pending_tx)
 {
 	size_t tx_len;
 	u8 *data;
 	int ret;
 	struct wsm_hdr *wsm;
+	int tx_burst;
 
 	if (priv->device_can_sleep) {
 		ret = cw1200_device_wakeup(priv);
@@ -347,7 +347,7 @@ static int cw1200_bh_tx_helper(struct cw1200_common *priv,
 	}
 
 	wsm_alloc_tx_buffer(priv);
-	ret = wsm_get_tx(priv, &data, &tx_len, tx_burst);
+	ret = wsm_get_tx(priv, &data, &tx_len, &tx_burst);
 	if (ret <= 0) {
 		wsm_release_tx_buffer(priv, 1);
 		if (WARN_ON(ret < 0))
@@ -386,7 +386,7 @@ static int cw1200_bh_tx_helper(struct cw1200_common *priv,
 	wsm_txed(priv, data);
 	priv->wsm_tx_seq = (priv->wsm_tx_seq + 1) & WSM_TX_SEQ_MAX;
 
-	if (*tx_burst > 1) {
+	if (tx_burst > 1) {
 		cw1200_debug_tx_burst(priv);
 		return 1; /* Work remains */
 	}
@@ -400,7 +400,6 @@ static int cw1200_bh(void *arg)
 	int rx, tx, term, suspend;
 	u16 ctrl_reg = 0;
 	int pending_tx = 0;
-	int tx_burst;
 	long status;
 	int ret;
 
@@ -545,16 +544,15 @@ static int cw1200_bh(void *arg)
 			tx = 0;
 
 			BUG_ON(priv->hw_bufs_used > priv->wsm_caps.input_buffers);
-			tx_burst = priv->wsm_caps.input_buffers - priv->hw_bufs_used;
 
-			if (tx_burst <= 0) {
+			if (priv->hw_bufs_used >= priv->wsm_caps.input_buffers) {
 				/* Buffers full.  Ensure we process tx
 				 * after we handle rx..
 				 */
 				pending_tx = tx;
 				goto done_rx;
 			}
-			ret = cw1200_bh_tx_helper(priv, &pending_tx, &tx_burst);
+			ret = cw1200_bh_tx_helper(priv, &pending_tx);
 			if (ret < 0)
 				break;
 			if (ret > 0) /* More to transmit */

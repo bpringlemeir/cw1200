@@ -1692,8 +1692,10 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 
 			spin_unlock_bh(&priv->ps_state_lock);
 
-			if (ret)
+			if (ret) {
+				*burst = 0;
 				break;
+			}
 
 			if (cw1200_queue_get(queue,
 					     tx_allowed_mask,
