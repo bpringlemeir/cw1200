@@ -480,7 +480,7 @@ static int cw1200_bh(void *arg)
 				/* And terminate BH thread if the frame is "stuck" */
 				if (pending && timeout < 0) {
 					wiphy_warn(priv->hw->wiphy,
-						   "Timeout waiting for TX confirm (%d/%d pending, %ld vs %lu).\n",
+						   "Timeout waiting for TX confirm (%d/%d pending, %lu vs %lu).\n",
 						   priv->hw_bufs_used, pending,
 						   timestamp, jiffies);
 					break;
