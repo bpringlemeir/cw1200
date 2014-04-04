@@ -1558,10 +1558,12 @@ static bool wsm_handle_tx_data(struct cw1200_common *priv,
 		} else if (ieee80211_is_deauth(fctl) &&
 			   priv->mode != NL80211_IFTYPE_AP) {
 			pr_debug("[WSM] Issue unjoin command due to tx deauth.\n");
-			wsm_lock_tx_async(priv);
-			if (queue_work(priv->workqueue,
-				       &priv->unjoin_work) <= 0)
-				wsm_unlock_tx(priv);
+			if (priv->join_status) {
+				wsm_lock_tx_async(priv);
+				if (queue_work(priv->workqueue,
+					       &priv->unjoin_work) <= 0)
+					wsm_unlock_tx(priv);
+			}
 		} else if (ieee80211_has_protected(fctl) &&
 			   tx_info->control.hw_key &&
 			   tx_info->control.hw_key->keyidx != priv->wep_default_key_id &&
