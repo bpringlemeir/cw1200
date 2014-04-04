@@ -1078,6 +1078,37 @@ underflow:
 }
 
 
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+#define REG_MASK (WSM_HIST_SIZE-1)
+void wsm_cmd_hist(struct cw1200_common *priv)
+{
+	int i;
+#ifdef WSMCMD_STACKTRACE
+	u16 pid = 0xffff;
+#endif
+
+	if(priv->wsm_cmd_dumped)
+		return;
+
+	priv->wsm_cmd_dumped = 1;
+	printk(" CMD    MIB    PID  ticks\n");
+	for(i = 0; i < WSM_HIST_SIZE; i++)  {
+		printk("%s0x%04x 0x%04x %04d %04x\n",
+		       i == ((priv->wsm_cmd_in - 1) & REG_MASK) ? "*" : " ",
+		       priv->wsm_cmd_hist[i],
+		       priv->wsm_cmd_mib[i],
+		       priv->wsm_cmd_pid[i],
+		       priv->wsm_cmd_tick[i]);
+#ifdef WSMCMD_STACKTRACE
+		if(pid != priv->wsm_cmd_pid[i]) {
+			print_stack_trace(&priv->wsm_cmd_trc[i], 2);
+			pid = priv->wsm_cmd_pid[i];
+		}
+#endif
+	}
+}
+#endif
+
 /* ******************************************************************** */
 /* WSM TX								*/
 /* All callers use 'wsm_cmd_mux', so there can only be one caller.  We
@@ -1125,6 +1156,20 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 	priv->wsm_cmd.len = buf_len;
 	priv->wsm_cmd.arg = arg;
 	priv->wsm_cmd.cmd = cmd;
+
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+#ifdef WSMCMD_STACKTRACE
+	priv->wsm_cmd_trc[priv->wsm_cmd_in & REG_MASK].nr_entries = 0;
+	save_stack_trace(&priv->wsm_cmd_trc[priv->wsm_cmd_in & REG_MASK]);
+#endif
+	priv->wsm_cmd_tick[priv->wsm_cmd_in & REG_MASK] = jiffies;
+	priv->wsm_cmd_hist[priv->wsm_cmd_in & REG_MASK] = cmd;
+	priv->wsm_cmd_mib[priv->wsm_cmd_in & REG_MASK] =
+		(cmd == WSM_WRITE_MIB_REQ_ID) ?
+		__le16_to_cpu(((__le16 *)buf->begin)[2]) : 0xffff;
+	priv->wsm_cmd_pid[priv->wsm_cmd_in++ & REG_MASK] = task_pid_nr(current);
+	priv->wsm_cmd_dumped = 0;
+#endif
 
 	cw1200_bh_wakeup(priv);
 

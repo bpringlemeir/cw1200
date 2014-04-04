@@ -407,6 +407,24 @@ static struct ieee80211_hw *cw1200_init_common(const u8 *macaddr,
 	init_waitqueue_head(&priv->ps_mode_switch_done);
 	wsm_buf_init(&priv->wsm_cmd_buf);
 	init_completion(&priv->wsm_cmd_comp);
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+	priv->wsm_cmd_in = 0;
+	memset(priv->wsm_cmd_hist, 0, sizeof(priv->wsm_cmd_hist));
+	memset(priv->wsm_cmd_pid, 0, sizeof(priv->wsm_cmd_pid));
+	memset(priv->wsm_cmd_mib, 0, sizeof(priv->wsm_cmd_mib));
+	memset(&priv->wsm_cmd_tick, 0, sizeof(priv->wsm_cmd_tick));
+#ifdef WSMCMD_STACKTRACE
+	memset(&priv->wsm_cmd_entries, 0, sizeof(priv->wsm_cmd_entries));
+	for(i = 0; i < WSM_HIST_SIZE; i++) {
+		memset(&priv->wsm_cmd_trc[i], 0, sizeof(priv->wsm_cmd_trc[0]));
+		priv->wsm_cmd_trc[i].max_entries = CW1200_MAX_TRACE;
+		priv->wsm_cmd_trc[i].skip = 1;
+		priv->wsm_cmd_trc[i].entries =
+			&priv->wsm_cmd_entries[i*CW1200_MAX_TRACE];
+	}
+#endif
+#endif
+
 	tx_policy_init(priv);
 
 	return hw;

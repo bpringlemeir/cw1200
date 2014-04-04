@@ -10,7 +10,7 @@ if CW1200
 
 config CW1200_WLAN_SDIO
 	tristate "Support SDIO platforms"
-	depends on CW1200 && MMC
+	depends on MMC
 	help
 	  Enable support for the CW1200 connected via an SDIO bus.
 	  By default this driver only supports the Sagrad SG901-1091/1098 EVK
@@ -21,7 +21,7 @@ config CW1200_WLAN_SDIO
 
 config CW1200_SPI
        tristate "Support SPI platform"
-       depends on CW1200 && SPI       	
+       depends on SPI
 
 choice 
        prompt "SPI platform subtype"
@@ -30,23 +30,21 @@ choice
        
 config CW1200_WLAN_SPI
        tristate "Support SPI Linux default bus master"
-       depends on CW1200 && SPI
+       depends on CW1200_SPI
        help
          This enables support for the CW1200 via a SPI bus.
 
 config CW1200_WLAN_SPI_NBS
        tristate "Support SPI NBS bus master (EXPERIMENTAL)"
-       depends on CW1200 && SPI
+       depends on CW1200_SPI
        help
          This enables support for the CW1200 via a SPI NBS bus.
 endchoice
 
-config CW1200_WLAN_SAGRAD
-       tristate "Support Sagrad SG901-1091/1098 modules"
-       depends on CW1200_WLAN_SDIO
-       help
-	 This provides the platform data glue to support the
-	 Sagrad SG901-1091/1098 modules in their standard SDIO EVK.
-	 It also includes example SPI platform data.
-
+config CW1200_WSM_TRACE
+	bool "Enable tracing of WSM commands."
+	default N
+	---help---
+	  A debugging option to trace CW1200 chip commands sent before
+	  a lock up.
 endif

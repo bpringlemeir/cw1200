@@ -585,6 +585,7 @@ static int cw1200_bh(void *arg)
 
 	if (!term) {
 		pr_err("[BH] Fatal error, exiting.\n");
+		wsm_cmd_hist(priv);
 		priv->bh_error = 1;
 		/* TODO: schedule_work(recovery) */
 		// VLAD: waking up SoC reset and restart sequence

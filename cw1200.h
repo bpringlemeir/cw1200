@@ -25,6 +25,10 @@
 #include <linux/completion.h>
 #include <net/mac80211.h>
 
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+#include <linux/stacktrace.h>
+#endif
+
 #include "queue.h"
 #include "wsm.h"
 #include "scan.h"
@@ -240,6 +244,23 @@ struct cw1200_common {
 	struct wsm_buf			wsm_cmd_buf;
 	struct wsm_cmd			wsm_cmd;
 	struct completion		wsm_cmd_comp;
+
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+#define WSM_HIST_SIZE 8
+	u16                  wsm_cmd_hist[WSM_HIST_SIZE];
+	u16                  wsm_cmd_mib[WSM_HIST_SIZE];
+	u16                  wsm_cmd_pid[WSM_HIST_SIZE];
+	u32                  wsm_cmd_tick[WSM_HIST_SIZE];
+	unsigned int         wsm_cmd_in;
+	int                  wsm_cmd_dumped;
+#define WSMCMD_STACKTRACE 1
+#ifdef WSMCMD_STACKTRACE
+#define CW1200_MAX_TRACE 16
+	struct stack_trace   wsm_cmd_trc[WSM_HIST_SIZE];
+	unsigned long        wsm_cmd_entries[WSM_HIST_SIZE*CW1200_MAX_TRACE];
+#endif
+#endif
+
 	wait_queue_head_t		wsm_startup_done;
 	int                             firmware_ready;
 	atomic_t			tx_lock;
@@ -311,6 +332,11 @@ struct cw1200_common {
 		wait_queue_head_t cw1200_fw_wq;
 		int cw1200_fw_error_status;
 };
+#if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
+extern void wsm_cmd_hist(struct cw1200_common *priv);
+#else
+#define wsm_cmd_hist(a) /* Nothing */
+#endif
 
 struct cw1200_sta_priv {
 	int link_id;
