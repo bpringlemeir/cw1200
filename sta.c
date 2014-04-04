@@ -1197,22 +1197,17 @@ static void cw1200_join_complete(struct cw1200_common *priv)
 	pr_debug("[STA] Join complete (%d)\n", priv->join_complete_status);
 
 	priv->join_pending = false;
-	cancel_delayed_work_sync(&priv->join_timeout);
 
 	if (priv->join_complete_status) {
-		mutex_lock(&priv->conf_mutex);
 		priv->join_status = CW1200_JOIN_STATUS_PASSIVE;
 		cw1200_update_listening(priv, priv->listening);
 		cw1200_do_unjoin(priv);
-		mutex_unlock(&priv->conf_mutex);
 		ieee80211_connection_loss(priv->vif);
 	} else {
-		mutex_lock(&priv->conf_mutex);
 		if (priv->mode == NL80211_IFTYPE_ADHOC)
 			priv->join_status = CW1200_JOIN_STATUS_IBSS;
 		else
 			priv->join_status = CW1200_JOIN_STATUS_PRE_STA;
-		mutex_unlock(&priv->conf_mutex);
 	}
 	wsm_unlock_tx(priv); /* Clearing the lock held before do_join() */
 }
@@ -1221,7 +1216,14 @@ void cw1200_join_complete_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, join_complete_work);
+
+	priv->join_pending = false;
+	if (!cancel_delayed_work(&priv->join_timeout))
+		return;
+
+	mutex_lock(&priv->conf_mutex);
 	cw1200_join_complete(priv);
+	mutex_unlock(&priv->conf_mutex);
 }
 
 void cw1200_join_complete_cb(struct cw1200_common *priv,
@@ -1230,13 +1232,12 @@ void cw1200_join_complete_cb(struct cw1200_common *priv,
 	pr_debug("[STA] cw1200_join_complete_cb called, status=%d.\n",
 		 arg->status);
 
-	if (cancel_delayed_work(&priv->join_timeout)) {
-		priv->join_complete_status = arg->status;
-		queue_work(priv->workqueue, &priv->join_complete_work);
-	}
+	priv->join_complete_status = arg->status;
+	queue_work(priv->workqueue, &priv->join_complete_work);
 }
 
-/* MUST be called with tx_lock held!  It will be unlocked for us. */
+/* MUST be called with tx_lock held!  It will be unlocked for us. Also
+ * called with the 'conf_mutex' held. */
 static void cw1200_do_join(struct cw1200_common *priv)
 {
 	const u8 *bssid;
@@ -1258,11 +1259,9 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		return;
 	}
 
-	if (priv->join_status) {
-		mutex_lock(&priv->conf_mutex);
+	if (priv->join_status)
 		cw1200_do_unjoin(priv);
-		mutex_unlock(&priv->conf_mutex);
-	}
+
 	bssid = priv->vif->bss_conf.bssid;
 
 	bss = cfg80211_get_bss(priv->hw->wiphy, priv->channel,
@@ -1272,8 +1271,6 @@ static void cw1200_do_join(struct cw1200_common *priv)
 		wsm_unlock_tx(priv);
 		return;
 	}
-
-	mutex_lock(&priv->conf_mutex);
 
 	/* Under the conf lock: check scan status and
 	 * bail out if it is in progress.
@@ -1381,9 +1378,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 			wsm_unlock_tx(priv);
 	} else {
 		if (!(join.flags & WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND)) {
-			mutex_unlock(&priv->conf_mutex);
 			cw1200_join_complete(priv); /* Will clear tx_lock */
-			mutex_lock(&priv->conf_mutex);
         }
 		/* Upload keys */
 		cw1200_upload_keys(priv);
@@ -1398,7 +1393,6 @@ static void cw1200_do_join(struct cw1200_common *priv)
 	cw1200_update_filtering(priv);
 
 done_put:
-	mutex_unlock(&priv->conf_mutex);
 	if (bss)
 		cfg80211_put_bss(priv->hw->wiphy, bss);
 }
@@ -2114,12 +2108,12 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 		}
 		wsm_set_rcpi_rssi_threshold(priv, &threshold);
 	}
-	mutex_unlock(&priv->conf_mutex);
 
 	if (do_join) {
 		wsm_lock_tx(priv);
 		cw1200_do_join(priv); /* Will unlock it for us */
 	}
+	mutex_unlock(&priv->conf_mutex);
 }
 
 void cw1200_multicast_start_work(struct work_struct *work)
