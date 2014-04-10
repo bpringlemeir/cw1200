@@ -1697,105 +1697,101 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	       size_t *tx_len, int *burst)
 {
 	struct wsm_tx *wsm = NULL;
-	struct ieee80211_tx_info *tx_info;
 	struct cw1200_queue *queue = NULL;
 	int queue_num;
 	u32 tx_allowed_mask = 0;
 	const struct cw1200_txpriv *txpriv = NULL;
-	int count = 0;
 
 	/* More is used only for broadcasts. */
 	bool more = false;
 
 	if (priv->wsm_cmd.ptr) { /* CMD request */
-		++count;
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
 		CW1200_BUG_ON(*data == NULL);
 		*burst = 1;
-	} else {
-		for (;;) {
-			int ret;
+		return 1;
+	}
+	for (;;) {
+		int ret;
+		struct ieee80211_tx_info *tx_info;
 
-			if (atomic_read(&priv->tx_lock))
-				break;
+		if (atomic_read(&priv->tx_lock))
+			return 0;
 
-			spin_lock_bh(&priv->ps_state_lock);
+		spin_lock_bh(&priv->ps_state_lock);
 
-			ret = wsm_get_tx_queue_and_mask(priv, &queue,
-							&tx_allowed_mask, &more);
-			queue_num = queue - priv->tx_queue;
+		ret = wsm_get_tx_queue_and_mask(priv, &queue,
+						&tx_allowed_mask, &more);
+		queue_num = queue - priv->tx_queue;
 
-			if (priv->buffered_multicasts &&
-			    (ret || !more) &&
-			    (priv->tx_multicast || !priv->sta_asleep_mask)) {
-				priv->buffered_multicasts = false;
-				if (priv->tx_multicast) {
-					priv->tx_multicast = false;
-					queue_work(priv->workqueue,
-						   &priv->multicast_stop_work);
-				}
+		if (priv->buffered_multicasts &&
+		    (ret || !more) &&
+		    (priv->tx_multicast || !priv->sta_asleep_mask)) {
+			priv->buffered_multicasts = false;
+			if (priv->tx_multicast) {
+				priv->tx_multicast = false;
+				queue_work(priv->workqueue,
+					   &priv->multicast_stop_work);
 			}
-
-			spin_unlock_bh(&priv->ps_state_lock);
-
-			if (ret) {
-				*burst = 0;
-				break;
-			}
-
-			if (cw1200_queue_get(queue,
-					     tx_allowed_mask,
-					     &wsm, &tx_info, &txpriv))
-				continue;
-
-			if (wsm_handle_tx_data(priv, wsm,
-					       tx_info, txpriv, queue))
-				continue;  /* Handled by WSM */
-
-			wsm->hdr.id &= __cpu_to_le16(
-				~WSM_TX_LINK_ID(WSM_TX_LINK_ID_MAX));
-			wsm->hdr.id |= cpu_to_le16(
-				WSM_TX_LINK_ID(txpriv->raw_link_id));
-			priv->pspoll_mask &= ~BIT(txpriv->raw_link_id);
-
-			*data = (u8 *)wsm;
-			*tx_len = __le16_to_cpu(wsm->hdr.len);
-
-			/* allow bursting if txop is set */
-			if (priv->edca.params[queue_num].txop_limit)
-				*burst = min(*burst,
-					     (int)cw1200_queue_get_num_queued(queue, tx_allowed_mask) + 1);
-			else
-				*burst = 1;
-
-			/* store index of bursting queue */
-			if (*burst > 1)
-				priv->tx_burst_idx = queue_num;
-			else
-				priv->tx_burst_idx = -1;
-
-			if (more) {
-				struct ieee80211_hdr *hdr =
-					(struct ieee80211_hdr *)
-					&((u8 *)wsm)[txpriv->offset];
-				/* more buffered multicast/broadcast frames
-				 *  ==> set MoreData flag in IEEE 802.11 header
-				 *  to inform PS STAs
-				 */
-				hdr->frame_control |=
-					cpu_to_le16(IEEE80211_FCTL_MOREDATA);
-			}
-
-			pr_debug("[WSM] >>> 0x%.4X (%zu) %p %c\n",
-				 0x0004, *tx_len, *data,
-				 wsm->more ? 'M' : ' ');
-			++count;
-			break;
 		}
+
+		spin_unlock_bh(&priv->ps_state_lock);
+
+		if (ret) {
+			*burst = 0;
+			return 0;
+		}
+
+		if (cw1200_queue_get(queue,tx_allowed_mask,
+				     &wsm, &tx_info, &txpriv))
+			continue;
+
+		if (!wsm_handle_tx_data(priv, wsm,
+				       tx_info, txpriv, queue))
+			break;
+		/* Handled by WSM */
 	}
 
-	return count;
+	wsm->hdr.id &= __cpu_to_le16(
+		~WSM_TX_LINK_ID(WSM_TX_LINK_ID_MAX));
+	wsm->hdr.id |= cpu_to_le16(
+		WSM_TX_LINK_ID(txpriv->raw_link_id));
+	priv->pspoll_mask &= ~BIT(txpriv->raw_link_id);
+
+	*data = (u8 *)wsm;
+	*tx_len = __le16_to_cpu(wsm->hdr.len);
+
+	/* allow bursting if txop is set */
+	if (priv->edca.params[queue_num].txop_limit)
+		*burst = min(*burst,
+			     (int)cw1200_queue_get_num_queued(queue, tx_allowed_mask) + 1);
+	else
+		*burst = 1;
+
+	/* store index of bursting queue */
+	if (*burst > 1)
+		priv->tx_burst_idx = queue_num;
+	else
+		priv->tx_burst_idx = -1;
+
+	if (more) {
+		struct ieee80211_hdr *hdr =
+			(struct ieee80211_hdr *)
+			&((u8 *)wsm)[txpriv->offset];
+		/* more buffered multicast/broadcast frames
+		 *  ==> set MoreData flag in IEEE 802.11 header
+		 *  to inform PS STAs
+		 */
+		hdr->frame_control |=
+			cpu_to_le16(IEEE80211_FCTL_MOREDATA);
+	}
+
+	pr_debug("[WSM] >>> 0x%.4X (%zu) %p %c\n",
+		 0x0004, *tx_len, *data,
+		 wsm->more ? 'M' : ' ');
+
+	return 1;
 }
 
 void wsm_txed(struct cw1200_common *priv, u8 *data)
