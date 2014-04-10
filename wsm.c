@@ -1089,9 +1089,9 @@ void wsm_cmd_hist(struct cw1200_common *priv)
 		return;
 
 	priv->wsm_cmd_dumped = 1;
-	printk(" CMD    MIB    PID  ticks\n");
+	printk(" CMD    MIB    PID  ticks (now:%lu)\n", jiffies);
 	for(i = 0; i < WSM_HIST_SIZE; i++)  {
-		printk("%s0x%04x 0x%04x %04d %04x\n",
+		printk("%s0x%04x 0x%04x %04d %lu\n",
 		       i == ((priv->wsm_cmd_in - 1) & REG_MASK) ? "*" : " ",
 		       priv->wsm_cmd_hist[i],
 		       priv->wsm_cmd_mib[i],

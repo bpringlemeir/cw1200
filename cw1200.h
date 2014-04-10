@@ -250,7 +250,7 @@ struct cw1200_common {
 	u16                  wsm_cmd_hist[WSM_HIST_SIZE];
 	u16                  wsm_cmd_mib[WSM_HIST_SIZE];
 	u16                  wsm_cmd_pid[WSM_HIST_SIZE];
-	u32                  wsm_cmd_tick[WSM_HIST_SIZE];
+	unsigned long        wsm_cmd_tick[WSM_HIST_SIZE];
 	unsigned int         wsm_cmd_in;
 	int                  wsm_cmd_dumped;
 #define WSMCMD_STACKTRACE 1
@@ -328,9 +328,9 @@ struct cw1200_common {
 	u8			action_linkid;
 
 	// VLAD:
-		struct work_struct cw1200_fw_failure_work;
-		wait_queue_head_t cw1200_fw_wq;
-		int cw1200_fw_error_status;
+	struct work_struct cw1200_fw_failure_work;
+	wait_queue_head_t cw1200_fw_wq;
+	int cw1200_fw_error_status;
 };
 #if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
 extern void wsm_cmd_hist(struct cw1200_common *priv);
