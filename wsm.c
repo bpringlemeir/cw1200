@@ -1181,14 +1181,15 @@ static int wsm_cmd_send(struct cw1200_common *priv,
 			/* Return ok to help system cleanup */
 			ret = 0;
 		} else {
+			/* Kill BH thread to report the error to the top layer. */
+			priv->bh_error = 1;
+			barrier();
+
 			pr_err("CMD req (0x%04x) stuck in firmware, killing BH\n", priv->wsm_cmd.cmd);
 			print_hex_dump_bytes("REQDUMP: ", DUMP_PREFIX_NONE,
 					     buf->begin, buf_len);
 			pr_err("Outstanding outgoing frames:  %d\n", priv->hw_bufs_used);
 
-			/* Kill BH thread to report the error to the top layer. */
-			priv->bh_error = 1;
-			barrier();
 			wake_up(&priv->bh_wq);
 			ret = -ETIMEDOUT;
 		}
@@ -1203,13 +1204,13 @@ done:
 
 void wsm_lock_tx(struct cw1200_common *priv)
 {
-	if (atomic_add_return(1, &priv->tx_lock) == 1)
+	if (atomic_inc_return(&priv->tx_lock) == 1)
 		wsm_flush_tx(priv);
 }
 
 void wsm_lock_tx_async(struct cw1200_common *priv)
 {
-	atomic_add_return(1, &priv->tx_lock);
+	atomic_inc(&priv->tx_lock);
 }
 
 bool wsm_flush_tx(struct cw1200_common *priv)
@@ -1234,6 +1235,8 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 		pr_err("[WSM] Fatal error occurred, will not flush TX.\n");
 		return false;
 	}
+
+	init_completion(&priv->wsm_evt);
 
 	/* Get a timestamp of "oldest" frame */
 	for (i = 0; i < 4; ++i)
@@ -1262,8 +1265,7 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 
 void wsm_unlock_tx(struct cw1200_common *priv)
 {
-	int tx_lock;
-	tx_lock = atomic_sub_return(1, &priv->tx_lock);
+	int tx_lock = atomic_dec_return(&priv->tx_lock);
 	CW1200_BUG_ON(tx_lock < 0);
 
 	if (tx_lock == 0) {
