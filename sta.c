@@ -1624,9 +1624,7 @@ int cw1200_sta_remove(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	spin_lock_bh(&priv->ps_state_lock);
 	entry->status = CW1200_LINK_RESERVE;
 	entry->timestamp = jiffies;
-	wsm_lock_tx_async(priv);
-	if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
-		wsm_unlock_tx(priv);
+	cw1200_queue_link_id_work(priv);
 	spin_unlock_bh(&priv->ps_state_lock);
 	flush_workqueue(priv->workqueue);
 	return 0;

@@ -99,6 +99,7 @@ void cw1200_link_id_reset(struct work_struct *work);
 
 int cw1200_find_link_id(struct cw1200_common *priv, const u8 *mac);
 int cw1200_alloc_link_id(struct cw1200_common *priv, const u8 *mac);
+void cw1200_queue_link_id_work(struct cw1200_common *priv);
 void cw1200_link_id_work(struct work_struct *work);
 void cw1200_link_id_gc_work(struct work_struct *work);
 

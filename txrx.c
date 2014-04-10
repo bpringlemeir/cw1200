@@ -1290,10 +1290,7 @@ void cw1200_link_id_reset(struct work_struct *work)
 			priv->link_id_db[temp_linkid - 1].status =
 				CW1200_LINK_RESET;
 			spin_unlock_bh(&priv->ps_state_lock);
-			wsm_lock_tx_async(priv);
-			if (queue_work(priv->workqueue,
-				       &priv->link_id_work) <= 0)
-				wsm_unlock_tx(priv);
+			cw1200_queue_link_id_work(priv);
 		}
 	} else {
 		spin_lock_bh(&priv->ps_state_lock);
@@ -1302,9 +1299,7 @@ void cw1200_link_id_reset(struct work_struct *work)
 		priv->link_id_db[priv->action_linkid - 1].status =
 			CW1200_LINK_RESET_REMAP;
 		spin_unlock_bh(&priv->ps_state_lock);
-		wsm_lock_tx_async(priv);
-		if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
-			wsm_unlock_tx(priv);
+		cw1200_queue_link_id_work(priv);
 		flush_workqueue(priv->workqueue);
 	}
 }
@@ -1353,9 +1348,7 @@ int cw1200_alloc_link_id(struct cw1200_common *priv, const u8 *mac)
 		memcpy(&entry->mac, mac, ETH_ALEN);
 		memset(&entry->buffered, 0, CW1200_MAX_TID);
 		skb_queue_head_init(&entry->rx_queue);
-		wsm_lock_tx_async(priv);
-		if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
-			wsm_unlock_tx(priv);
+		cw1200_queue_link_id_work(priv);
 	} else {
 		wiphy_info(priv->hw->wiphy,
 			   "[AP] Early: no more link IDs available.\n");
@@ -1363,6 +1356,15 @@ int cw1200_alloc_link_id(struct cw1200_common *priv, const u8 *mac)
 
 	spin_unlock_bh(&priv->ps_state_lock);
 	return ret;
+}
+
+/* As per cw1200_link_id_work(), we call wsm_flush_tx() so the
+ * wsm_lock_tx_async() here is fine.*/
+void cw1200_queue_link_id_work(struct cw1200_common *priv)
+{
+	wsm_lock_tx_async(priv);
+	if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
+		wsm_unlock_tx(priv);
 }
 
 void cw1200_link_id_work(struct work_struct *work)
