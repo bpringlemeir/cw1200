@@ -78,6 +78,12 @@ static inline void cw1200_cqm_bssloss_sm(struct cw1200_common *priv,
 
 void cw1200_join_timeout(struct work_struct *work);
 void cw1200_unjoin_work(struct work_struct *work);
+/* Ensure wsm_unlock_tx() is called if pending. */
+static inline void cw1200_cancel_unjoin_work(struct cw1200_common *priv)
+{
+    if(cancel_work_sync(&priv->unjoin_work))
+        wsm_unlock_tx(priv);
+}
 void cw1200_join_complete_work(struct work_struct *work);
 void cw1200_wep_key_work(struct work_struct *work);
 void cw1200_update_listening(struct cw1200_common *priv, bool enabled);

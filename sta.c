@@ -111,7 +111,7 @@ void cw1200_stop(struct ieee80211_hw *dev)
 	cancel_delayed_work_sync(&priv->clear_recent_scan_work);
 	cancel_delayed_work_sync(&priv->join_timeout);
 	cw1200_cqm_bssloss_sm(priv, 0, 0, 0);
-	cancel_work_sync(&priv->unjoin_work);
+	cw1200_cancel_unjoin_work(priv);
 	cancel_delayed_work_sync(&priv->link_id_gc_work);
 	flush_workqueue(priv->workqueue);
 	del_timer_sync(&priv->mcast_timeout);
@@ -996,7 +996,7 @@ void cw1200_event_handler(struct work_struct *work)
 			break;
 		case WSM_EVENT_BSS_LOST:
 			pr_debug("[CQM] BSS lost.\n");
-			cancel_work_sync(&priv->unjoin_work);
+			cw1200_cancel_unjoin_work(priv);
 			if (!down_trylock(&priv->scan.lock)) {
 				cw1200_cqm_bssloss_sm(priv, 1, 0, 0);
 				up(&priv->scan.lock);
@@ -1013,7 +1013,7 @@ void cw1200_event_handler(struct work_struct *work)
 		case WSM_EVENT_BSS_REGAINED:
 			pr_debug("[CQM] BSS regained.\n");
 			cw1200_cqm_bssloss_sm(priv, 0, 0, 0);
-			cancel_work_sync(&priv->unjoin_work);
+			cw1200_cancel_unjoin_work(priv);
 			break;
 		case WSM_EVENT_RADAR_DETECTED:
 			wiphy_info(priv->hw->wiphy, "radar pulse detected\n");
@@ -1997,7 +1997,7 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 				cw1200_ht_ampdu_density(&priv->ht_info);
 
 			cw1200_cqm_bssloss_sm(priv, 0, 0, 0);
-			cancel_work_sync(&priv->unjoin_work);
+			cw1200_cancel_unjoin_work(priv);
 
 			priv->bss_params.beacon_lost_count = priv->cqm_beacon_loss_count;
 			priv->bss_params.aid = info->aid;
