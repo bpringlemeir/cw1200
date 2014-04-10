@@ -952,7 +952,7 @@ struct wsm_join_cnf {
 	u32 max_power_level;
 };
 
-int wsm_join(struct cw1200_common *priv, struct wsm_join *arg);
+int wsm_join(struct cw1200_common *priv, const struct wsm_join *arg);
 
 /* 3.24 */
 struct wsm_join_complete {

@@ -1241,6 +1241,7 @@ void cw1200_join_complete_cb(struct cw1200_common *priv,
 static void cw1200_do_join(struct cw1200_common *priv)
 {
 	const u8 *bssid;
+	int    join_status;
 	struct ieee80211_bss_conf *conf = &priv->vif->bss_conf;
 	struct cfg80211_bss *bss = NULL;
 	struct wsm_protected_mgmt_policy mgmt_policy;
@@ -1369,7 +1370,8 @@ static void cw1200_do_join(struct cw1200_common *priv)
 	wsm_set_protected_mgmt_policy(priv, &mgmt_policy);
 
 	/* Perform actual join */
-	if (wsm_join(priv, &join)) {
+	join_status = wsm_join(priv, &join);
+	if (join_status < 0) {
 		pr_err("[STA] cw1200_join_work: wsm_join failed!\n");
 		cancel_delayed_work_sync(&priv->join_timeout);
 		cw1200_update_listening(priv, priv->listening);
@@ -1378,6 +1380,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 			wsm_unlock_tx(priv);
 	} else {
 		if (!(join.flags & WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND)) {
+			priv->join_complete_status = join_status;
 			cw1200_join_complete(priv); /* Will clear tx_lock */
         }
 		/* Upload keys */

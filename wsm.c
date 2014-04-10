@@ -427,7 +427,7 @@ underflow:
 	return -EINVAL;
 }
 
-int wsm_join(struct cw1200_common *priv, struct wsm_join *arg)
+int wsm_join(struct cw1200_common *priv, const struct wsm_join *arg)
 {
 	int ret;
 	struct wsm_buf *buf = &priv->wsm_cmd_buf;
@@ -453,10 +453,8 @@ int wsm_join(struct cw1200_common *priv, struct wsm_join *arg)
 			   WSM_JOIN_REQ_ID, WSM_CMD_TIMEOUT);
 	/* TODO:  Update state based on resp.min|max_power_level */
 
-	priv->join_complete_status = resp.status;
-
 	wsm_cmd_unlock(priv);
-	return ret;
+	return ret < 0 ? ret : resp.status;
 
 nomem:
 	wsm_cmd_unlock(priv);
