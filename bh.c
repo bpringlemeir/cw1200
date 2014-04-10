@@ -136,6 +136,8 @@ void cw1200_bh_wakeup(struct cw1200_common *priv)
 
 static inline void wsm_alloc_tx_buffer(struct cw1200_common *priv)
 {
+	if(priv->hw_bufs_used == 0)
+		init_completion(&priv->wsm_evt);
 	++priv->hw_bufs_used;
 }
 
@@ -151,7 +153,7 @@ int wsm_release_tx_buffer(struct cw1200_common *priv, int count)
 		ret = 1;                  /* throttle */
 	else if (hw_bufs_used == count) {
 		priv->tx_race = 0;
-		complete(&priv->wsm_evt); /* signal flush */
+		complete_all(&priv->wsm_evt); /* signal flush */
 	}
 	return ret;
 }
@@ -506,7 +508,7 @@ static int cw1200_bh(void *arg)
 			}
 
 			atomic_set(&priv->bh_suspend, CW1200_BH_SUSPENDED);
-			complete(&priv->wsm_evt);
+			complete_all(&priv->wsm_evt);
 			status = wait_event_interruptible(priv->bh_wq,
 							  CW1200_BH_RESUME == atomic_read(&priv->bh_suspend));
 			if (status < 0) {
@@ -517,7 +519,7 @@ static int cw1200_bh(void *arg)
 			}
 			pr_debug("[BH] Device resume.\n");
 			atomic_set(&priv->bh_suspend, CW1200_BH_RESUMED);
-			complete(&priv->wsm_evt);
+			complete_all(&priv->wsm_evt);
 			atomic_add(1, &priv->bh_rx);
 			goto done;
 		}
@@ -593,7 +595,7 @@ static int cw1200_bh(void *arg)
 				goto rx;
 			}
 			printk("tx_race, no fix!\n");
-			complete(&priv->wsm_evt); /* signal flush */
+			complete_all(&priv->wsm_evt); /* signal flush */
 		}
 	done:
 		/* Re-enable device interrupts */

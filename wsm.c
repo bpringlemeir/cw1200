@@ -1236,8 +1236,6 @@ bool wsm_flush_tx(struct cw1200_common *priv)
 		return false;
 	}
 
-	init_completion(&priv->wsm_evt);
-
 	/* Get a timestamp of "oldest" frame */
 	for (i = 0; i < 4; ++i)
 		pending |= cw1200_queue_get_xmit_timestamp(
