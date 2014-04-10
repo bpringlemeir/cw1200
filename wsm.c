@@ -1705,7 +1705,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	/* More is used only for broadcasts. */
 	bool more = false;
 
-	if (priv->wsm_cmd.ptr) { /* CMD request */
+	if (priv->wsm_cmd.ptr && !priv->tx_race) { /* CMD request */
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
 		CW1200_BUG_ON(*data == NULL);
