@@ -331,6 +331,8 @@ struct cw1200_common {
 	struct work_struct cw1200_fw_failure_work;
 	wait_queue_head_t cw1200_fw_wq;
 	int cw1200_fw_error_status;
+
+	int tx_race;  /* race between bh and wsm_tx_flush */
 };
 #if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
 extern void wsm_cmd_hist(struct cw1200_common *priv);

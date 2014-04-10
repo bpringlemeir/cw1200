@@ -84,6 +84,7 @@ int cw1200_register_bh(struct cw1200_common *priv)
 	priv->hw_bufs_used = 0;
 	priv->buf_id_tx = 0;
 	priv->buf_id_rx = 0;
+	priv->tx_race = 0;
 	init_waitqueue_head(&priv->bh_wq);
 	init_completion(&priv->wsm_evt);
 
@@ -148,8 +149,10 @@ int wsm_release_tx_buffer(struct cw1200_common *priv, int count)
 		ret = -1;                 /* error */
 	else if (hw_bufs_used >= priv->wsm_caps.input_buffers)
 		ret = 1;                  /* throttle */
-	else if (hw_bufs_used == count)
+	else if (hw_bufs_used == count) {
+		priv->tx_race = 0;
 		complete(&priv->wsm_evt); /* signal flush */
+	}
 	return ret;
 }
 
@@ -570,7 +573,28 @@ static int cw1200_bh(void *arg)
 			goto rx;
 		if (tx)
 			goto tx;
-
+#define TX_RACE_INTERVAL 10
+#define TX_RACE_WAIT (3*1000/TX_RACE_INTERVAL)
+		/* A tx_flush raced with bh_tx_helper(), try to fix. */
+		if(priv->tx_race) {
+			int count = 0;
+			while(!(ctrl_reg & ST90TDS_CONT_NEXT_LEN_MASK)) {
+				mdelay(TX_RACE_INTERVAL);
+				/* Re-read ctrl reg */
+				if (cw1200_bh_read_ctrl_reg(priv, &ctrl_reg)) {
+					priv->bh_error = 1;
+					break;
+				}
+				if(count++ > TX_RACE_WAIT) /* 3 seconds. */
+					break;
+			}
+			if(count < TX_RACE_WAIT) {
+				printk("tx_race delay fixed.\n");
+				goto rx;
+			}
+			printk("tx_race, no fix!\n");
+			complete(&priv->wsm_evt); /* signal flush */
+		}
 	done:
 		/* Re-enable device interrupts */
 		priv->hwbus_ops->lock(priv->hwbus_priv);

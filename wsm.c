@@ -1791,6 +1791,9 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 		 0x0004, *tx_len, *data,
 		 wsm->more ? 'M' : ' ');
 
+	if(atomic_read(&priv->tx_lock))
+		priv->tx_race = 1;
+
 	return 1;
 }
 
