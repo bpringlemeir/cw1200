@@ -432,11 +432,11 @@ static int cw1200_bh(void *arg)
 
 		pr_debug("[BH] waiting ...\n");
 		status = wait_event_interruptible_timeout(priv->bh_wq, ({
-				rx = atomic_xchg(&priv->bh_rx, 0);
-				tx = atomic_xchg(&priv->bh_tx, 0);
 				term = atomic_xchg(&priv->bh_term, 0);
 				suspend = pending_tx ?
 					0 : atomic_read(&priv->bh_suspend);
+				rx = atomic_xchg(&priv->bh_rx, 0);
+				tx = atomic_xchg(&priv->bh_tx, 0);
 				(rx || tx || term || suspend || priv->bh_error);
 			}), status);
 
@@ -480,9 +480,9 @@ static int cw1200_bh(void *arg)
 				/* And terminate BH thread if the frame is "stuck" */
 				if (pending && timeout < 0) {
 					wiphy_warn(priv->hw->wiphy,
-						   "Timeout waiting for TX confirm (%d/%d pending, %lu vs %lu).\n",
+						   "Timeout waiting for TX confirm (%d/%d pending, %lu vs %lu) lock: %s.\n",
 						   priv->hw_bufs_used, pending,
-						   timestamp, jiffies);
+						   timestamp, jiffies, atomic_read(&priv->tx_lock) ? "locked" : "ok");
 					break;
 				}
 			} else if (!priv->device_can_sleep &&
