@@ -19,6 +19,7 @@
 #include <linux/delay.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
+#include <linux/suspend.h>
 #include <net/mac80211.h>
 
 #include <linux/spi/spi.h>
@@ -50,28 +51,79 @@ struct hwbus_priv {
 	u8 spi_io_buf[SPI_NBS_MAX_BUF_SIZE];
 	int claimed;
 	// VLAD:
-		spinlock_t      fw_reset_lock;
 		int manually_suspended;
+		atomic_t suspended;
+		struct work_struct cw1200_fw_failure_work;
+		struct notifier_block	pm_notify;
+		struct mutex			spi_pm_mutex;
+
 
 };
 
 static struct platform_device *cw1200_fwio_dev;
 static void cw1200_fw_failure_job(struct work_struct *work);
+
+int cw1200_pm_notify(struct notifier_block *notify_block,
+					unsigned long mode, void *unused)
+{
+  struct hwbus_priv *self = container_of(notify_block, struct hwbus_priv, pm_notify);
+  switch (mode) {
+  case PM_SUSPEND_PREPARE:
+  { int ret;
+    mutex_lock(&self->spi_pm_mutex);
+    if(self->manually_suspended || atomic_read(&self->suspended) ) {
+  	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
+  	  mutex_unlock(&self->spi_pm_mutex);
+  	  return 0;
+    }
+    self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
+    wake_up_interruptible(&self->core->cw1200_fw_wq);
+    ret = wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status);
+    self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+    mutex_unlock(&self->spi_pm_mutex);
+
+  } break;
+  case PM_POST_SUSPEND:
+  {
+    if(self->manually_suspended) {
+  	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
+  	  return 0;
+    }
+
+
+
+    if(NULL == self->core) {
+  	dev_err(&cw1200_spi_dev->dev,"%s(): self->core is NULL.\n",__func__);
+  	return 0;
+
+    }
+
+    self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+
+    init_waitqueue_head(&self->core->cw1200_fw_wq);
+    INIT_WORK(&self->cw1200_fw_failure_work,cw1200_fw_failure_job);
+    queue_work(cw1200_fwio_workqueue,&self->cw1200_fw_failure_work);
+  } break;
+
+  }
+  return 0;
+}
+
+
 static int cw1200_fwio_prepare(struct device *dev)
 {
-  struct hwbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
+	  struct hwbus_priv *self = spi_get_drvdata(cw1200_spi_dev);
 
-  if(self->manually_suspended) {
-	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
-
+	  if(self->manually_suspended || atomic_read(&self->suspended) ) {
+		  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
+		  return 0;
+	  }
+	  dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
+	  self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
+	  wake_up_interruptible(&self->core->cw1200_fw_wq);
+	  wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status);
+	  self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
 	  return 0;
-  }
-  dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
-  self->core->cw1200_fw_error_status = CW1200_FW_ERR_DOTERMINATE;
-  wake_up_interruptible(&self->core->cw1200_fw_wq);
-  wait_event_interruptible(self->core->cw1200_fw_wq,CW1200_FW_ERR_TERMINATED == self->core->cw1200_fw_error_status);
-
- return 0;
 }
 
 
@@ -83,19 +135,20 @@ static void cw1200_fwio_complete(struct device *dev)
 	  dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
 	  return;
   }
+
   dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
+
+  if(NULL == self->core) {
+	dev_err(&cw1200_spi_dev->dev,"%s(): self->core is NULL.\n",__func__);
+	return;
+
+  }
+
   self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+
   init_waitqueue_head(&self->core->cw1200_fw_wq);
-  INIT_WORK(&self->core->cw1200_fw_failure_work,cw1200_fw_failure_job);
-  queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
-
-
+  queue_work(cw1200_fwio_workqueue,&self->cw1200_fw_failure_work);
 }
-
-static const struct dev_pm_ops cw1200_fwio_ops = {
-  .prepare =  cw1200_fwio_prepare,
-  .complete =  cw1200_fwio_complete,
-};
 
 static struct class *cw1200_class;
 
@@ -124,7 +177,6 @@ static struct platform_driver cw1200_fwio_driver = {
 	.remove = cw1200_fwio_remove,
 	.driver = {
 		.name = "cw1200_fw_io",
-		.pm = &cw1200_fwio_ops,
 	},
 };
 
@@ -526,7 +578,7 @@ static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
 
-	if(self->manually_suspended) {
+	if(self->manually_suspended || atomic_cmpxchg(&self->suspended,0,1)) {
      dev_dbg(&cw1200_spi_dev->dev,"%s() already suspended \n",__func__);
      return 0;
 	}
@@ -535,9 +587,8 @@ static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 	dev_info(&cw1200_spi_dev->dev,"%s() \n",__func__);
 
 	 if(self) {
-       cw1200_spi_irq_unsubscribe(self);
 	   if(self->core) {
-
+        cw1200_spi_irq_unsubscribe(self);
 	    cw1200_core_release(self->core);
 	    self->core = NULL;
 	   }
@@ -562,11 +613,12 @@ static int cw1200_spi_resume(struct spi_device *spi_dev)
 	const struct resource *reset = pdata->reset;
 	const struct resource *powerup = pdata->powerup;
 
-    if(self->manually_suspended) {
+    if(self->manually_suspended || !atomic_cmpxchg(&self->suspended,1,0)) {
         dev_dbg(&cw1200_spi_dev->dev,"%s() skipped resume \n",__func__);
         return 0;
 
     }
+
 
 	if (reset || powerup)
 		msleep(10); /* Settle time? */
@@ -599,10 +651,10 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 {
  int status;
  pm_message_t evt;
- struct hwbus_priv *self;
- struct cw1200_common *priv =
-		container_of(work, struct cw1200_common, cw1200_fw_failure_work);
+ struct hwbus_priv *self = container_of(work, struct hwbus_priv, cw1200_fw_failure_work);
+ struct cw1200_common *priv;
 
+ priv = self->core;
  evt.event = 0;
 
  status = wait_event_interruptible(priv->cw1200_fw_wq,CW1200_FW_ERR_IDLE != priv->cw1200_fw_error_status);
@@ -626,30 +678,25 @@ static void cw1200_fw_failure_job(struct work_struct *work)
      dev_err(&cw1200_spi_dev->dev,"cw1200 reset fw command timeout\n");
      goto terminate;
     } else if( CW1200_FW_ERR_DORESET == priv->cw1200_fw_error_status) {
-     dev_info(&cw1200_spi_dev->dev,"executing cw1200 firmware reset\n");
-     cw1200_fw_reset_cnt++;
-     cw1200_spi_suspend(cw1200_spi_dev,evt);
-     msleep_interruptible(200);
-     cw1200_spi_resume(cw1200_spi_dev);
+        dev_info(&cw1200_spi_dev->dev,"executing cw1200 firmware reset\n");
+        cw1200_fw_reset_cnt++;
+        mutex_lock(&self->spi_pm_mutex);
+        cw1200_spi_suspend(cw1200_spi_dev,evt);
+        msleep_interruptible(200);
+        cw1200_spi_resume(cw1200_spi_dev);
+        self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
+        init_waitqueue_head(&self->core->cw1200_fw_wq);
+        mutex_unlock(&self->spi_pm_mutex);
     } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
     	   goto terminate;
     } else goto oops;
   }
  } else if (CW1200_FW_ERR_DORESET ==  priv->cw1200_fw_error_status) {
-     dev_info(&cw1200_spi_dev->dev,"external request to reset cw1200 firmware received\n");
-     cw1200_spi_suspend(cw1200_spi_dev,evt);
-     msleep_interruptible(200);
-     cw1200_spi_resume(cw1200_spi_dev);
+     dev_err(&cw1200_spi_dev->dev,"RESET not allowed\n");
+     self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
  } else if (CW1200_FW_ERR_DOTERMINATE ==  priv->cw1200_fw_error_status) {
    goto terminate;
  } else goto oops;
- self = spi_get_drvdata(cw1200_spi_dev);
-
-
- self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
- init_waitqueue_head(&self->core->cw1200_fw_wq);
- INIT_WORK(&self->core->cw1200_fw_failure_work, cw1200_fw_failure_job);
-
 
  if(!cw1200_fwio_dev) {
    int ret;
@@ -660,7 +707,7 @@ static void cw1200_fw_failure_job(struct work_struct *work)
 		kfree(cw1200_fwio_dev);
 	 }
  }
- queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+ queue_work(cw1200_fwio_workqueue,&self->cw1200_fw_failure_work);
  return;
 oops:
  dev_err(&cw1200_spi_dev->dev,"%s() unexpected event: %d\n",__func__,priv->cw1200_fw_error_status);
@@ -690,10 +737,16 @@ static ssize_t cw1200_do_reset(struct device *dev,
 
  if(!strcmp(buf,"RESET\n")) {
   dev_info(&cw1200_spi_dev->dev,"%s() RESET received \n",__func__);
-  if(self) {
-   dev_info(&cw1200_spi_dev->dev,"%s() waking up the terminator \n",__func__);
-   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DORESET;
-   wake_up_interruptible(&self->core->cw1200_fw_wq);
+  if(self && self->core) {
+
+   if(CW1200_FW_ERR_DOALARM == self->core->cw1200_fw_error_status  ) {
+	   dev_info(&cw1200_spi_dev->dev,"%s() waking up the terminator \n",__func__);
+	   self->core->cw1200_fw_error_status = CW1200_FW_ERR_DORESET;
+	   wake_up_interruptible(&self->core->cw1200_fw_wq);
+   } else {
+	   dev_info(&cw1200_spi_dev->dev,"%s() RESET not permitted at state: %d \n",__func__,self->core->cw1200_fw_error_status );
+
+   }
   } else {
    dev_err(&cw1200_spi_dev->dev,"%s self == NULL\n",__func__);
   }
@@ -729,7 +782,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 	struct hwbus_priv *self;
 	int status;
 
-	cw1200_fwio_workqueue = create_workqueue("cw1200_fwio_q");
+	cw1200_fwio_workqueue = alloc_workqueue("cw1200_fwio_q",WQ_RESCUER , 1);
 	if( NULL == cw1200_fwio_workqueue) {
 		dev_err(&func->dev,"cw1200_fwio_workqueue == NULL\n");
 		return -EFAULT;
@@ -772,10 +825,10 @@ static int cw1200_spi_probe(struct spi_device *func)
 	self->pdata = plat_data;
 	self->func = func;
 	spin_lock_init(&self->lock);
-	spin_lock_init(&self->fw_reset_lock);
 	spi_set_drvdata(func, self);
 
 	init_waitqueue_head(&self->wq);
+	mutex_init(&self->spi_pm_mutex);
 
 	status = cw1200_spi_irq_subscribe(self);
 
@@ -789,8 +842,8 @@ static int cw1200_spi_probe(struct spi_device *func)
     if( 0 == status) {
      self->core->cw1200_fw_error_status = CW1200_FW_ERR_IDLE;
 	 init_waitqueue_head(&self->core->cw1200_fw_wq);
-	 INIT_WORK(&self->core->cw1200_fw_failure_work, cw1200_fw_failure_job);
-	 queue_work(cw1200_fwio_workqueue,&self->core->cw1200_fw_failure_work);
+	 INIT_WORK(&self->cw1200_fw_failure_work, cw1200_fw_failure_job);
+	 queue_work(cw1200_fwio_workqueue,&self->cw1200_fw_failure_work);
 
     }
 
@@ -801,6 +854,9 @@ static int cw1200_spi_probe(struct spi_device *func)
 		kfree(self);
 	}
 	cw1200_spi_dev = func;
+	self->pm_notify.notifier_call = cw1200_pm_notify;
+	register_pm_notifier(&self->pm_notify);
+
 	status = device_create_file(&func->dev,&dev_attr_cw1200_fw_ok);
 	if(status) dev_err(&func->dev, "dev_attr_dev_type %d", status);
 
@@ -823,6 +879,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 static int cw1200_spi_disconnect(struct spi_device *func)
 {
 	struct hwbus_priv *self = spi_get_drvdata(func);
+	unregister_pm_notifier(&self->pm_notify);
 
 	if (self) {
 		cw1200_spi_irq_unsubscribe(self);
@@ -835,6 +892,7 @@ static int cw1200_spi_disconnect(struct spi_device *func)
 
 	cw1200_spi_off(func->dev.platform_data);
 	destroy_workqueue(cw1200_fwio_workqueue);
+	mutex_destroy(&self->spi_pm_mutex);
 	return 0;
 }
 
@@ -924,6 +982,16 @@ static int cw1200_debugfs_set_cmd(void *data, u64 val)
   wake_up_interruptible(&self->core->cw1200_fw_wq);
 
  } break;
+ case 5: {
+  struct hwbus_priv *self = NULL;
+  self = spi_get_drvdata(cw1200_spi_dev);
+
+  self->core->bh_error = 1;
+  barrier();
+  wake_up(&self->core->bh_wq);
+
+ }
+
 
  }
 
