@@ -122,9 +122,6 @@ struct cw1200_common {
 	struct ieee80211_vif		*vif;
 	struct device			*pdev;
 
-	/* Statistics */
-	struct ieee80211_low_level_stats stats;
-
 	/* Our macaddr */
 	u8 mac_addr[ETH_ALEN];
 

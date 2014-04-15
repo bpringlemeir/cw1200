@@ -669,9 +669,7 @@ out:
 int cw1200_get_stats(struct ieee80211_hw *dev,
 		     struct ieee80211_low_level_stats *stats)
 {
-	struct cw1200_common *priv = dev->priv;
-
-	memcpy(stats, &priv->stats, sizeof(*stats));
+	memset(stats, 0, sizeof(*stats));
 	return 0;
 }
 
