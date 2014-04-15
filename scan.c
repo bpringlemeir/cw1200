@@ -45,6 +45,8 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	ret = wsm_scan(priv, scan);
 	if (ret) {
 		atomic_set(&priv->scan.in_progress, 0);
+		if( (ret < 0) && (priv->bh_error))
+			return ret;
 		cancel_delayed_work_sync(&priv->scan.timeout);
 		cw1200_scan_restart_delayed(priv);
 	}
@@ -259,7 +261,15 @@ void cw1200_scan_work(struct work_struct *work)
 fail:
 	priv->scan.curr = priv->scan.end;
 	mutex_unlock(&priv->conf_mutex);
+
+	if( (1 == priv->bh_error) ) {
+     pr_debug("[%s()] SCAN start crashed\n",__func__);
+     up(&priv->scan.lock);
+     ieee80211_scan_completed(priv->hw, 1);
+     return;
+	} else {
 	queue_work(priv->workqueue, &priv->scan.work);
+	}
 	return;
 }
 
