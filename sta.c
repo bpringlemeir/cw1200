@@ -862,7 +862,7 @@ void cw1200_wep_key_work(struct work_struct *work)
 
 	pr_debug("[STA] Setting default WEP key: %d\n",
 		 priv->wep_default_key_id);
-	wsm_flush_tx(priv);
+	wsm_lock_tx(priv);
 	wsm_write_mib(priv, WSM_MIB_ID_DOT11_WEP_DEFAULT_KEY_ID,
 		      &wep_default_key_id, sizeof(wep_default_key_id));
 	cw1200_queue_requeue(queue, priv->pending_frame_id);
@@ -1475,6 +1475,9 @@ void cw1200_unjoin_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, unjoin_work);
+
+	if(atomic_xchg(&priv->unjoin_flush, 0))
+		wsm_lock_tx(priv);
 
 	if(cancel_delayed_work(&priv->join_timeout))
 		wsm_unlock_tx(priv);

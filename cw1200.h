@@ -274,6 +274,7 @@ struct cw1200_common {
 	bool			join_pending;
 	struct delayed_work	join_timeout;
 	struct work_struct	unjoin_work;
+	atomic_t                unjoin_flush;
 	struct work_struct	join_complete_work;
 	int			join_complete_status;
 	int			join_dtim_period;

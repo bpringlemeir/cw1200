@@ -902,12 +902,12 @@ static int wsm_receive_indication(struct cw1200_common *priv,
 	skb_pull(*skb_p, hdr_len);
 	if (!rx.status && ieee80211_is_deauth(fctl)) {
 		if (priv->join_status == CW1200_JOIN_STATUS_STA) {
+			int old;
 			/* Shedule unjoin work */
 			pr_debug("[WSM] Issue unjoin command (RX).\n");
-			wsm_lock_tx_async(priv);
-			if (queue_work(priv->workqueue,
-				       &priv->unjoin_work) <= 0)
-				wsm_unlock_tx(priv);
+			old = atomic_xchg(&priv->unjoin_flush, 1);
+			if (queue_work(priv->workqueue, &priv->unjoin_work) <= 0)
+				atomic_xchg(&priv->unjoin_flush, old);
 		}
 	}
 	cw1200_rx_cb(priv, &rx, link_id, skb_p);
@@ -1204,13 +1204,10 @@ done:
 
 void wsm_lock_tx(struct cw1200_common *priv)
 {
+	wsm_cmd_lock(priv);  /* Prevent command when flush in progress. */
 	if (atomic_inc_return(&priv->tx_lock) == 1)
 		wsm_flush_tx(priv);
-}
-
-void wsm_lock_tx_async(struct cw1200_common *priv)
-{
-	atomic_inc(&priv->tx_lock);
+	wsm_cmd_unlock(priv);
 }
 
 bool wsm_flush_tx(struct cw1200_common *priv)
@@ -1557,10 +1554,10 @@ static bool wsm_handle_tx_data(struct cw1200_common *priv,
 			   priv->mode != NL80211_IFTYPE_AP) {
 			pr_debug("[WSM] Issue unjoin command due to tx deauth.\n");
 			if (priv->join_status) {
-				wsm_lock_tx_async(priv);
+				int old = atomic_xchg(&priv->unjoin_flush, 1);
 				if (queue_work(priv->workqueue,
 					       &priv->unjoin_work) <= 0)
-					wsm_unlock_tx(priv);
+					atomic_xchg(&priv->unjoin_flush, old);
 			}
 		} else if (ieee80211_has_protected(fctl) &&
 			   tx_info->control.hw_key &&
@@ -1578,11 +1575,8 @@ static bool wsm_handle_tx_data(struct cw1200_common *priv,
 		 * probe request into WSM start_scan command.
 		 */
 		pr_debug("[WSM] Convert probe request to scan.\n");
-		wsm_lock_tx_async(priv);
 		priv->pending_frame_id = wsm->packet_id;
-		if (queue_delayed_work(priv->workqueue,
-				       &priv->scan.probe_work, 0) <= 0)
-			wsm_unlock_tx(priv);
+		queue_delayed_work(priv->workqueue, &priv->scan.probe_work, 0);
 		handled = true;
 		break;
 	case do_drop:
@@ -1592,11 +1586,9 @@ static bool wsm_handle_tx_data(struct cw1200_common *priv,
 		break;
 	case do_wep:
 		pr_debug("[WSM] Issue set_default_wep_key.\n");
-		wsm_lock_tx_async(priv);
 		priv->wep_default_key_id = tx_info->control.hw_key->keyidx;
 		priv->pending_frame_id = wsm->packet_id;
-		if (queue_work(priv->workqueue, &priv->wep_key_work) <= 0)
-			wsm_unlock_tx(priv);
+		queue_work(priv->workqueue, &priv->wep_key_work);
 		handled = true;
 		break;
 	case do_tx:

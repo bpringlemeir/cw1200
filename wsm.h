@@ -1799,7 +1799,6 @@ static inline int wsm_set_override_internal_txrate(struct cw1200_common *priv,
 /* WSM TX port control							*/
 
 void wsm_lock_tx(struct cw1200_common *priv);
-void wsm_lock_tx_async(struct cw1200_common *priv);
 bool wsm_flush_tx(struct cw1200_common *priv);
 void wsm_unlock_tx(struct cw1200_common *priv);
 

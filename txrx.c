@@ -391,8 +391,8 @@ void tx_policy_upload_work(struct work_struct *work)
 		container_of(work, struct cw1200_common, tx_policy_upload_work);
 
 	pr_debug("[TX] TX policy upload.\n");
+	wsm_lock_tx(priv);
 	tx_policy_upload(priv);
-
 	wsm_unlock_tx(priv);
 	cw1200_tx_queues_unlock(priv);
 }
@@ -670,12 +670,10 @@ cw1200_tx_h_rate_policy(struct cw1200_common *priv,
 		 * Better to reimplement task scheduling with
 		 * a counter. TODO.
 		 */
-		wsm_lock_tx_async(priv);
 		cw1200_tx_queues_lock(priv);
 		if (queue_work(priv->workqueue,
 			       &priv->tx_policy_upload_work) <= 0) {
 			cw1200_tx_queues_unlock(priv);
-			wsm_unlock_tx(priv);
 		}
 	}
 	return 0;
@@ -1358,20 +1356,16 @@ int cw1200_alloc_link_id(struct cw1200_common *priv, const u8 *mac)
 	return ret;
 }
 
-/* As per cw1200_link_id_work(), we call wsm_flush_tx() so the
- * wsm_lock_tx_async() here is fine.*/
 void cw1200_queue_link_id_work(struct cw1200_common *priv)
 {
-	wsm_lock_tx_async(priv);
-	if (queue_work(priv->workqueue, &priv->link_id_work) <= 0)
-		wsm_unlock_tx(priv);
+	queue_work(priv->workqueue, &priv->link_id_work);
 }
 
 void cw1200_link_id_work(struct work_struct *work)
 {
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common, link_id_work);
-	wsm_flush_tx(priv);
+	wsm_lock_tx(priv);
 	cw1200_link_id_gc_work(&priv->link_id_gc_work.work);
 	wsm_unlock_tx(priv);
 }

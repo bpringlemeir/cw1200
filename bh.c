@@ -80,6 +80,7 @@ int cw1200_register_bh(struct cw1200_common *priv)
 	atomic_set(&priv->bh_tx, 0);
 	atomic_set(&priv->bh_term, 0);
 	atomic_set(&priv->bh_suspend, CW1200_BH_RESUMED);
+	atomic_set(&priv->unjoin_flush, 0);
 	priv->bh_error = 0;
 	priv->hw_bufs_used = 0;
 	priv->buf_id_tx = 0;

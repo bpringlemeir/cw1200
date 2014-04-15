@@ -401,9 +401,9 @@ void cw1200_probe_work(struct work_struct *work)
 				 &frame.skb, &txpriv)) {
 		up(&priv->scan.lock);
 		mutex_unlock(&priv->conf_mutex);
-		wsm_unlock_tx(priv);
 		return;
 	}
+	wsm_lock_tx(priv);
 	wsm = (struct wsm_tx *)frame.skb->data;
 	scan.max_tx_rate = wsm->max_tx_rate;
 	scan.band = (priv->channel->band == IEEE80211_BAND_5GHZ) ?
