@@ -591,10 +591,9 @@ static int cw1200_bh(void *arg)
 				if(count++ > TX_RACE_WAIT) /* 3 seconds. */
 					break;
 			}
-			if(count < TX_RACE_WAIT) {
-				printk("tx_race delay fixed.\n");
+			if(count < TX_RACE_WAIT)
 				goto rx;
-			}
+
 			printk("tx_race, no fix!\n");
 			complete_all(&priv->wsm_evt); /* signal flush */
 		}
