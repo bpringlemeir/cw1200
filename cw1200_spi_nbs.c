@@ -36,7 +36,7 @@ MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SPI driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("spi:cw1200_wlan_spi");
 
-#define SPI_NBS_MAX_BUF_SIZE 2048
+#define SPI_NBS_MAX_BUF_SIZE 4096
 
 static struct workqueue_struct *cw1200_fwio_workqueue = NULL;
 static int cw1200_fw_reset_cnt = 0;
@@ -204,7 +204,7 @@ static struct platform_driver cw1200_fwio_driver = {
 
 static void spi_complete(void *context)
 {
-   udelay(10);
+   udelay(2);
 }
 
 static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
@@ -258,7 +258,7 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
      int counter = 0;
      int n_trans;
      int msg_ofs;
-     static struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
+     struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
 
      if(count > SPI_NBS_MAX_BUF_SIZE)
     	 return -ENOTSUPP;
@@ -345,7 +345,7 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
       int counter = 0;
       int n_trans;
       int msg_ofs;
-      static struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
+      struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
 
       if(count > SPI_NBS_MAX_BUF_SIZE)
     	 return -ENOTSUPP;
@@ -387,7 +387,6 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 static void cw1200_spi_lock(struct hwbus_priv *self)
 {
 	unsigned long flags;
-
 	DECLARE_WAITQUEUE(wait, current);
 
 	might_sleep();
@@ -584,7 +583,7 @@ static int cw1200_spi_suspend(struct spi_device *spi_dev, pm_message_t state)
 	}
 
 
-	dev_info(&cw1200_spi_dev->dev,"%s() \n",__func__);
+	dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
 
 	 if(self) {
 	   if(self->core) {
@@ -634,7 +633,7 @@ static int cw1200_spi_resume(struct spi_device *spi_dev)
 		gpio_set_value(reset->start, 1);
 		msleep(50); /* Or more..? */
 	}
-	 dev_info(&cw1200_spi_dev->dev,"%s() \n",__func__);
+	 dev_dbg(&cw1200_spi_dev->dev,"%s() \n",__func__);
 
 	cw1200_spi_irq_subscribe(self);
 	cw1200_core_probe(&cw1200_spi_hwbus_ops,
