@@ -92,6 +92,7 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 	mutex_lock(&priv->conf_mutex);
 
 	ret = wsm_set_template_frame(priv, &frame);
+	dev_kfree_skb(frame.skb);
 	if (!ret) {
 		/* Host want to be the probe responder. */
 		ret = wsm_set_probe_responder(priv, true);
@@ -99,7 +100,6 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 	if (ret) {
 		mutex_unlock(&priv->conf_mutex);
 		up(&priv->scan.lock);
-		dev_kfree_skb(frame.skb);
 		return ret;
 	}
 
@@ -123,9 +123,9 @@ int cw1200_hw_scan(struct ieee80211_hw *hw,
 
 	mutex_unlock(&priv->conf_mutex);
 
-	if (frame.skb)
-		dev_kfree_skb(frame.skb);
-	queue_work(priv->workqueue, &priv->scan.work);
+	if (queue_work(priv->workqueue, &priv->scan.work) <= 0)
+		wsm_unlock_tx(priv);
+
 	return 0;
 }
 
@@ -262,15 +262,15 @@ fail:
 	priv->scan.curr = priv->scan.end;
 	mutex_unlock(&priv->conf_mutex);
 
-	if( (1 == priv->bh_error) ) {
-     pr_debug("[%s()] SCAN start crashed\n",__func__);
-     up(&priv->scan.lock);
-     ieee80211_scan_completed(priv->hw, 1);
-     return;
-	} else {
-	queue_work(priv->workqueue, &priv->scan.work);
+	if (priv->bh_error) {
+		pr_debug("[%s()] SCAN start crashed\n",__func__);
+		up(&priv->scan.lock);
+		ieee80211_scan_completed(priv->hw, 1);
+		return;
 	}
-	return;
+	/* re-queue */
+	if (queue_work(priv->workqueue, &priv->scan.work) <= 0)
+		wsm_unlock_tx(priv);
 }
 
 static void cw1200_scan_restart_delayed(struct cw1200_common *priv)
