@@ -48,7 +48,6 @@ struct hwbus_priv {
 	const struct cw1200_platform_data_spi *pdata;
 	spinlock_t		lock; /* Serialize all bus operations */
 	wait_queue_head_t       wq;
-	u8 spi_io_buf[SPI_NBS_MAX_BUF_SIZE];
 	int claimed;
 	// VLAD:
 		int manually_suspended;
@@ -204,7 +203,7 @@ static struct platform_driver cw1200_fwio_driver = {
 
 static void spi_complete(void *context)
 {
-   udelay(2);
+   udelay(10);
 }
 
 static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
@@ -265,7 +264,6 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 
      memset(t_msg,0,sizeof(t_msg));
 
-   	 regaddr = swab16(regaddr);
      t_addr.tx_buf = &regaddr;
      t_addr.len = sizeof(regaddr);
 
@@ -281,16 +279,11 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 		 return -ENOTSUPP;
 
 	 for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=SPI_MAX_CHUNK) {
-       t_msg[i].rx_buf = &self->spi_io_buf[msg_ofs];
+       t_msg[i].rx_buf = &(((u8*)dst)[msg_ofs]);
        t_msg[i].len = ( (count - (i<<SPI_MAX_CHUNK_SHIFT) ) >> SPI_MAX_CHUNK_SHIFT ) ? SPI_MAX_CHUNK : (count&(SPI_MAX_CHUNK-1)) ;
        spi_message_add_tail(&t_msg[i], &m);
 	 }
-
 	 ret = spi_async_locked(self->func, &m);
-
-     for( i = 0; i < (count>>1);i++)
-      ((u16*)dst)[i] = swab16(((u16*)self->spi_io_buf)[i]);
-
 	} /* if(count > 4)*/
 	return ret;
 }
@@ -352,7 +345,6 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 
       memset(t_msg,0,sizeof(t_msg));
 
-      regaddr = swab16(regaddr);
       t_addr.tx_buf = &regaddr;
       t_addr.len = sizeof(regaddr);
 
@@ -366,20 +358,12 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 
  	  if(n_trans > sizeof(t_msg)/sizeof(t_msg[0]))
  		 return -ENOTSUPP;
-
- 	  for( i = 0; i < (count>>1);i++) {
-        ((u16*)self->spi_io_buf)[i] = swab16( ((u16*)src)[i]);
- 	  }
-
    	  for( i = 0 , msg_ofs = 0; i < n_trans;i++,msg_ofs+=SPI_MAX_CHUNK) {
-        t_msg[i].tx_buf = &self->spi_io_buf[msg_ofs];
+        t_msg[i].tx_buf = &(((u8*)src)[msg_ofs]);
         t_msg[i].len = ( (count - (i<<SPI_MAX_CHUNK_SHIFT) ) >> SPI_MAX_CHUNK_SHIFT ) ? SPI_MAX_CHUNK : (count&(SPI_MAX_CHUNK-1)) ;
         spi_message_add_tail(&t_msg[i], &m);
  	  }
-
  	  rval = spi_async_locked(self->func, &m);
-
-
 	}
 	return rval;
 }
@@ -799,7 +783,7 @@ static int cw1200_spi_probe(struct spi_device *func)
 		func->bits_per_word = 16;
 
 	/* And finally.. */
-	func->mode = SPI_MODE_0;
+	func->mode = SPI_MODE_0 | SPI_LSB_FIRST; // SPI_LSB_FIRST option tells nbs_spi driver to swap order in 16 bit words
 
 	pr_info("cw1200_wlan_spi: Probe called (CS %d M %d BPW %d CLK %d)\n",
 		func->chip_select, func->mode, func->bits_per_word,
