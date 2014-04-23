@@ -1695,7 +1695,7 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 	/* More is used only for broadcasts. */
 	bool more = false;
 
-	if (priv->wsm_cmd.ptr && !priv->tx_race) { /* CMD request */
+	if (priv->wsm_cmd.ptr) { /* CMD request */
 		*data = priv->wsm_cmd.ptr;
 		*tx_len = priv->wsm_cmd.len;
 		CW1200_BUG_ON(*data == NULL);
@@ -1728,10 +1728,8 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 
 		spin_unlock_bh(&priv->ps_state_lock);
 
-		if (ret) {
-			*burst = 0;
+		if (ret)
 			return 0;
-		}
 
 		if (cw1200_queue_get(queue,tx_allowed_mask,
 				     &wsm, &tx_info, &txpriv))
@@ -1781,8 +1779,12 @@ int wsm_get_tx(struct cw1200_common *priv, u8 **data,
 		 0x0004, *tx_len, *data,
 		 wsm->more ? 'M' : ' ');
 
-	if(atomic_read(&priv->tx_lock))
-		priv->tx_race = 1;
+	/* Race detected, put buffer back and pretend this didn't happen. */
+	if (atomic_read(&priv->tx_lock)) {
+		if(cw1200_queue_requeue(queue, wsm->packet_id))
+			printk("tx_race: requeue failed!\n");
+		return 0;
+	}
 
 	return 1;
 }
