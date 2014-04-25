@@ -55,6 +55,7 @@ struct hwbus_priv {
 		struct work_struct cw1200_fw_failure_work;
 		struct notifier_block	pm_notify;
 		struct mutex			spi_pm_mutex;
+		unsigned long           irqsave; /* used by cw1200_spi_lock/unlock() */
 
 
 };
@@ -193,6 +194,8 @@ static struct platform_driver cw1200_fwio_driver = {
    Hardware expects 32-bit data to be written as 16-bit BE words:
 
    B1 B0 B3 B2
+   VLAD:
+   The 16 bit byte swap is handled by spi_imx_nbs bus master driver when the device has SPI_LSB_FIRST flag selected.
 
 */
 /* Mark wrapper data as free to re-use. */
@@ -201,7 +204,7 @@ static struct platform_driver cw1200_fwio_driver = {
 #define SPI_MAX_CHUNK_SHIFT 9
 #define SPI_MAX_CHUNK  (1<<SPI_MAX_CHUNK_SHIFT)
 
-static void spi_complete(void *context)
+static __maybe_unused void spi_complete(void *context)
 {
    udelay(10);
 }
@@ -222,10 +225,9 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 	regaddr |= (count>>1);
 	regaddr = cpu_to_le16(regaddr);
 
-	if(unlikely(count < 0)) {  /* single SPI transaction crashes firmware, disabled*/
+	if(count < 5) {
      u8 spi_io_buf[32];
-     spi_io_buf[0] = ((u8*)&regaddr)[1];
-     spi_io_buf[1] = ((u8*)&regaddr)[0];
+     *((u16*)spi_io_buf) = regaddr;
      t_addr.len = count + 2;
      t_addr.tx_buf = spi_io_buf;
      t_addr.rx_buf = spi_io_buf;
@@ -233,19 +235,16 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 	 spi_message_init(&m);
 	 spi_message_add_tail(&t_addr, &m);
 	 ret = spi_async_locked(self->func, &m);
+	 udelay(5);
      if( 0 == ret) {
        if( 4 == count) {
-         ((u8*)dst)[0] = spi_io_buf[3];
-         ((u8*)dst)[1] = spi_io_buf[2];
-         ((u8*)dst)[2] = spi_io_buf[5];
-         ((u8*)dst)[3] = spi_io_buf[4];
+    	 *((u32*)dst) = *((u32*)(&spi_io_buf[2]));
        } else if( 2 == count) {
-         ((u8*)dst)[0] = spi_io_buf[3];
-         ((u8*)dst)[1] = spi_io_buf[2];
+      	 *((u16*)dst) = *((u16*)(&spi_io_buf[2]));
        }  else if( 0 == (count&1) ) { // data must be presented in 16-bit words
            for( i = 0; i < (count>>1); i += 2) {
-        	   ((u8*)dst)[ 2 + i ] = spi_io_buf[i+1];
-        	   ((u8*)dst)[ 3 + i ] = spi_io_buf[i];
+        	   ((u8*)dst)[ 2 + i ] = spi_io_buf[i];
+        	   ((u8*)dst)[ 3 + i ] = spi_io_buf[i+1];
            }
          } else {
         	 printk(KERN_CRIT"VLAD: %s(%d)!!!\n",__func__,count);
@@ -254,7 +253,6 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
      }
 
 	} else {
-     int counter = 0;
      int n_trans;
      int msg_ofs;
      struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
@@ -269,8 +267,6 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
 
 	 spi_message_init(&m);
 	// VLAD:
-	 m.complete = spi_complete;
-	 m.context = &counter;
 	 spi_message_add_tail(&t_addr, &m);
 
 	 n_trans = (count >> SPI_MAX_CHUNK_SHIFT) + (count&(SPI_MAX_CHUNK-1)?1:0);
@@ -284,6 +280,7 @@ static int cw1200_spi_memcpy_fromio(struct hwbus_priv *self,
        spi_message_add_tail(&t_msg[i], &m);
 	 }
 	 ret = spi_async_locked(self->func, &m);
+	 udelay(5);
 	} /* if(count > 4)*/
 	return ret;
 }
@@ -304,22 +301,17 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 	regaddr |= (count>>1);
 	regaddr = cpu_to_le16(regaddr);
 
-	if(unlikely(count <  0)) { /* single SPI transaction crashes firmware, disabled*/
+	if(count <  5) {
 	     u8 spi_io_buf[32];
-	     spi_io_buf[0] = ((u8*)&regaddr)[1];
-	     spi_io_buf[1] = ((u8*)&regaddr)[0];
+         *((u16*)spi_io_buf) = regaddr;
          if( 4 == count) {
-             spi_io_buf[2] = ((u8*)src)[1];
-        	 spi_io_buf[3] = ((u8*)src)[0];
-        	 spi_io_buf[4] = ((u8*)src)[3];
-        	 spi_io_buf[5] = ((u8*)src)[2];
+        	 *((u32*)(&spi_io_buf[2])) = *((u32*)src);
          } else if( 2 == count) {
-             spi_io_buf[2] = ((u8*)src)[1];
-        	 spi_io_buf[3] = ((u8*)src)[0];
+        	 *((u16*)(&spi_io_buf[2])) = *((u16*)src);
          } else if( 0 == (count&1) ) { // data must be presented in 16-bit words
            for( i = 0; i < (count>>1); i += 2) {
-             spi_io_buf[ 2 + i ] = ((u8*)src)[i+1];
-          	 spi_io_buf[ 3 + i ] = ((u8*)src)[i];
+             spi_io_buf[ 2 + i ] = ((u8*)src)[i];
+          	 spi_io_buf[ 3 + i ] = ((u8*)src)[i+1];
            }
          } else {
         	 printk(KERN_CRIT"VLAD: %s(%d)!!!\n",__func__,count);
@@ -328,14 +320,13 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 
 	     t_addr.len = count + 2;
 	     t_addr.tx_buf = spi_io_buf;
-	     t_addr.rx_buf = spi_io_buf;
 	     t_addr.bits_per_word = 0;
 
 		 spi_message_init(&m);
 		 spi_message_add_tail(&t_addr, &m);
 		 rval = spi_async_locked(self->func, &m);
+		 udelay(5);
 	} else {
-      int counter = 0;
       int n_trans;
       int msg_ofs;
       struct spi_transfer     t_msg[SPI_NBS_MAX_BUF_SIZE/SPI_MAX_CHUNK];
@@ -350,8 +341,7 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
 
  	  spi_message_init(&m);
  	  // VLAD:
- 	  m.complete = spi_complete;
- 	  m.context = &counter;
+
  	  spi_message_add_tail(&t_addr, &m);
 
  	  n_trans = (count >> SPI_MAX_CHUNK_SHIFT) + (count&(SPI_MAX_CHUNK-1)?1:0);
@@ -364,44 +354,20 @@ static int cw1200_spi_memcpy_toio(struct hwbus_priv *self,
         spi_message_add_tail(&t_msg[i], &m);
  	  }
  	  rval = spi_async_locked(self->func, &m);
+ 	  udelay(5);
 	}
 	return rval;
 }
 
 static void cw1200_spi_lock(struct hwbus_priv *self)
 {
-	unsigned long flags;
-	DECLARE_WAITQUEUE(wait, current);
-
-	might_sleep();
-
-	add_wait_queue(&self->wq, &wait);
-	spin_lock_irqsave(&self->lock, flags);
-	while (1) {
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		if (!self->claimed)
-			break;
-		spin_unlock_irqrestore(&self->lock, flags);
-		schedule();
-		spin_lock_irqsave(&self->lock, flags);
-	}
-	set_current_state(TASK_RUNNING);
-	self->claimed = 1;
-	spin_unlock_irqrestore(&self->lock, flags);
-	remove_wait_queue(&self->wq, &wait);
-
+	spin_lock_irqsave(&self->lock, self->irqsave);
 	return;
 }
 
 static void cw1200_spi_unlock(struct hwbus_priv *self)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&self->lock, flags);
-	self->claimed = 0;
-	spin_unlock_irqrestore(&self->lock, flags);
-	wake_up(&self->wq);
-
+	spin_unlock_irqrestore(&self->lock, self->irqsave);
 	return;
 }
 
@@ -425,10 +391,10 @@ static int cw1200_spi_irq_subscribe(struct hwbus_priv *self)
 
 	pr_debug("SW IRQ subscribe\n");
 
-	ret = request_threaded_irq(self->func->irq, NULL,
-				   cw1200_spi_irq_handler,
-				   IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+	ret = request_irq(self->func->irq,cw1200_spi_irq_handler,
+			        IRQF_TRIGGER_RISING,
 				   "cw1200_wlan_irq", self);
+
 	if (WARN_ON(ret < 0))
 		goto exit;
 
