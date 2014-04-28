@@ -240,20 +240,27 @@ int cw1200_queue_clear(struct cw1200_queue *queue)
 
 void cw1200_queue_stats_deinit(struct cw1200_queue_stats *stats)
 {
-	kfree(stats->link_map_cache);
+	int *map_cache = stats->link_map_cache;
+	stats->map_capacity = 0;
 	stats->link_map_cache = NULL;
+	kfree(map_cache);
 }
 
 void cw1200_queue_deinit(struct cw1200_queue *queue)
 {
+	int *map_cache = queue->link_map_cache;
+	struct cw1200_queue_item *pool = queue->pool;
+
 	cw1200_queue_clear(queue);
 	del_timer_sync(&queue->gc);
 	INIT_LIST_HEAD(&queue->free_pool);
-	kfree(queue->pool);
-	kfree(queue->link_map_cache);
+
+	queue->capacity = 0;
 	queue->pool = NULL;
 	queue->link_map_cache = NULL;
-	queue->capacity = 0;
+
+	kfree(pool);
+	kfree(map_cache);
 }
 
 size_t cw1200_queue_get_num_queued(struct cw1200_queue *queue,
