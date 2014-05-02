@@ -1905,11 +1905,8 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	}
 
 	/* assoc/disassoc, or maybe AID changed */
-	if (changed & BSS_CHANGED_ASSOC) {
-		wsm_lock_tx(priv);
+	if (changed & BSS_CHANGED_ASSOC)
 		priv->wep_default_key_id = -1;
-		wsm_unlock_tx(priv);
-	}
 
 	if (changed & BSS_CHANGED_BSSID) {
 		pr_debug("BSS_CHANGED_BSSID\n");

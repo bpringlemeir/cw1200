@@ -343,7 +343,7 @@ void cw1200_clear_recent_scan_work(struct work_struct *work)
 	struct cw1200_common *priv =
 		container_of(work, struct cw1200_common,
 			     clear_recent_scan_work.work);
-	atomic_xchg(&priv->recent_scan, 0);
+	atomic_set(&priv->recent_scan, 0);
 }
 
 void cw1200_scan_timeout(struct work_struct *work)
