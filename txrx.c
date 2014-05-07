@@ -1091,6 +1091,7 @@ void cw1200_rx_cb(struct cw1200_common *priv,
 		hdr->rate_idx = arg->rx_rate;
 	}
 
+	priv->last_rx_rssi = (s8)arg->rcpi_rssi;
 	hdr->signal = (s8)arg->rcpi_rssi;
 	hdr->antenna = 0;
 

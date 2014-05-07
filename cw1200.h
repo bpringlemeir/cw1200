@@ -328,6 +328,8 @@ struct cw1200_common {
 	// VLAD:
 	wait_queue_head_t cw1200_fw_wq;
 	int cw1200_fw_error_status;
+
+	int last_rx_rssi;
 };
 #if IS_ENABLED(CONFIG_CW1200_WSM_TRACE)
 extern void wsm_cmd_hist(struct cw1200_common *priv);

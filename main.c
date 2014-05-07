@@ -544,6 +544,39 @@ u32 cw1200_dpll_from_clk(u16 clk_khz)
 	}
 }
 
+#ifndef CONFIG_WIRELESS_EXT_SYSFS
+extern int (*sysfs_wireless_link)(struct net_device *dev);
+#else
+static int (*sysfs_wireless_link)(struct net_device *dev);
+#endif
+static int cw1200_wireless_link(struct net_device *dev)
+{
+	int rval;
+	int sig;
+	struct ieee80211_hw *hw;
+	struct cw1200_common *priv;
+
+	/* Follow many pointers to get the cw1200 structure. */
+	if(!dev->ieee80211_ptr || !dev->ieee80211_ptr->wiphy)
+		return -1;
+	hw = wiphy_to_ieee80211_hw(dev->ieee80211_ptr->wiphy);
+	if(!hw)
+		return -1;
+	priv = hw->priv;
+	if(!priv)
+		return -1;
+
+	/* Get last RX rssi value and convert. */
+	sig = priv->last_rx_rssi;
+	if (sig < -110)
+		sig = -110;
+	else if (sig > -40)
+		sig = -40;
+	rval = sig + 110;
+
+	return rval;
+}
+
 int cw1200_core_probe(const struct hwbus_ops *hwbus_ops,
 		      struct hwbus_priv *hwbus,
 		      struct device *pdev,
@@ -609,6 +642,7 @@ int cw1200_core_probe(const struct hwbus_ops *hwbus_ops,
 	if (err)
 		goto err2;
 
+	sysfs_wireless_link = cw1200_wireless_link;
 	return err;
 
 err2:
@@ -623,6 +657,8 @@ EXPORT_SYMBOL_GPL(cw1200_core_probe);
 
 void cw1200_core_release(struct cw1200_common *self)
 {
+	sysfs_wireless_link = NULL;
+
 	/* Disable device interrupts */
 	self->hwbus_ops->lock(self->hwbus_priv);
 	__cw1200_irq_enable(self, 0);
