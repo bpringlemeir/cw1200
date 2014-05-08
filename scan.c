@@ -43,14 +43,14 @@ static int cw1200_scan_start(struct cw1200_common *priv, struct wsm_scan *scan)
 	queue_delayed_work(priv->workqueue, &priv->scan.timeout,
 			   tmo * HZ / 1000);
 	ret = wsm_scan(priv, scan);
-	if (ret) {
+	if (ret || priv->bh_error) {
 		atomic_set(&priv->scan.in_progress, 0);
-		if( (ret < 0) && (priv->bh_error))
-			return ret;
 		cancel_delayed_work_sync(&priv->scan.timeout);
-		cw1200_scan_restart_delayed(priv);
+		if(!priv->bh_error)
+			cw1200_scan_restart_delayed(priv);
 	}
-	return ret;
+	/* Always return an error if 'bh_error' is set. */
+	return priv->bh_error ? -1 : ret;
 }
 
 int cw1200_hw_scan(struct ieee80211_hw *hw,
